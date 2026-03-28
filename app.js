@@ -516,7 +516,7 @@ function renderAssetCards() {
     { label: "債券", value: snapshot.bondLikeAssets, view: "bonds", note: "現金から除外する資産を含む" },
     { label: "投資信託・ETF", value: snapshot.fundsBalance, view: "funds", note: "CSVから取得した現在残高" },
     { label: "株式", value: snapshot.stocksBalance, view: "stocks", note: "個別株の現在残高" },
-    { label: "保険", value: snapshot.insuranceBalance, view: "insurance", note: "手動調整と内訳入力ベース" },
+    { label: "保険", value: snapshot.insuranceBalance, view: "insurance", note: "CSV保険残高と手動調整ベース" },
     { label: "ドル積立", value: snapshot.dollarBalance, view: "dollar", note: "SBIネット銀行の米ドル普通を初期値化" },
     { label: "年金", value: snapshot.pensionBalance, view: "pension", note: "開始年齢と受給条件は手入力" },
     { label: "負債", value: state.computed.summary?.currentDebt ?? 0, view: "debt", note: "純資産計算に使用" },
@@ -841,8 +841,8 @@ function renderInsuranceSection() {
     ${renderLabeledMetric("合計残高", snapshot ? formatCurrency(snapshot.insuranceBalance) : "--")}
     ${renderNumericField("手動調整額", "insurance-adjustment", state.manual.insuranceSettings.manualAdjustment)}
     ${renderNumericField("想定利回り（年）", "insurance-return", state.manual.insuranceSettings.expectedReturn, 0.1)}
-    <div class="field"><span>計算式</span><div class="pill">手動調整 + 積立 + 利回り</div></div>
-    <div class="field"><span>補足</span><div class="pill">現在価値は使わず、内訳入力のみを反映</div></div>
+    <div class="field"><span>計算式</span><div class="pill">元保険残高 + 手動調整 + 積立 + 利回り</div></div>
+    <div class="field"><span>補足</span><div class="pill">元保険残高はCSV合計、調整差分は手動調整額で反映</div></div>
   `;
   bindSimpleNumericInput("#insurance-adjustment", "manual.insuranceSettings.manualAdjustment");
   bindSimpleNumericInput("#insurance-return", "manual.insuranceSettings.expectedReturn");
@@ -1395,7 +1395,8 @@ function buildForecastTimeline(snapshot) {
   let fundsBalance = snapshot.fundsBalance;
   let stocksBalance = snapshot.stocksBalance;
   let bondAssets = structuredClone(state.manual.bondAssets).map((row) => ({ ...row }));
-  let insurancePolicies = structuredClone(state.manual.insurancePolicies).map((row) => ({ ...row, currentValue: 0 }));
+  let insurancePolicies = structuredClone(state.manual.insurancePolicies).map((row) => ({ ...row }));
+  let insuranceRunningBalance = snapshot.insuranceBalance;
   let pensionPlans = structuredClone(state.manual.pensions).map((row) => ({ ...row }));
   let dollarBalance = snapshot.dollarBalance;
   let loans = structuredClone(state.manual.loans).map((row) => ({ ...row }));
@@ -1430,10 +1431,10 @@ function buildForecastTimeline(snapshot) {
     insurancePolicies.forEach((policy) => {
       if (!policy.endMonth || monthLabel <= policy.endMonth.replace("-", "/")) {
         effectiveCash -= policy.premiumPerMonth;
-        policy.currentValue += policy.premiumPerMonth;
+        insuranceRunningBalance += policy.premiumPerMonth;
       }
-      policy.currentValue *= 1 + annualToMonthlyRate(state.manual.insuranceSettings.expectedReturn);
     });
+    insuranceRunningBalance *= 1 + annualToMonthlyRate(state.manual.insuranceSettings.expectedReturn);
 
     pensionPlans.forEach((plan) => {
       if (age < plan.startAge) {
@@ -1487,10 +1488,9 @@ function buildForecastTimeline(snapshot) {
     });
 
     const bondLikeAssets = bondAssets.filter((row) => !row.isMatured).reduce((sum, row) => sum + getBondDisplayValue(row), 0);
-    const insuranceBalance = insurancePolicies.reduce((sum, row) => sum + row.currentValue, 0) + state.manual.insuranceSettings.manualAdjustment;
     const pensionAssetBalance = pensionPlans.reduce((sum, row) => sum + row.currentValue, 0);
     const debtBalance = loans.reduce((sum, row) => sum + row.balance, 0) + cards.reduce((sum, row) => sum + row.balance, 0);
-    const totalAssets = effectiveCash + dollarBalance + bondLikeAssets + fundsBalance + stocksBalance + insuranceBalance + pensionAssetBalance;
+    const totalAssets = effectiveCash + dollarBalance + bondLikeAssets + fundsBalance + stocksBalance + insuranceRunningBalance + pensionAssetBalance;
     const netWorth = totalAssets - debtBalance;
 
     timeline.push({
@@ -1502,7 +1502,7 @@ function buildForecastTimeline(snapshot) {
       bondLikeAssets,
       fundsBalance,
       stocksBalance,
-      insuranceBalance,
+      insuranceBalance: insuranceRunningBalance,
       pensionAssetBalance,
       debtBalance,
       totalAssets,
@@ -1955,7 +1955,8 @@ function getSectionTotal(section) {
 }
 
 function getInsuranceCurrentBalance() {
-  return toNumber(state.manual.insuranceSettings.manualAdjustment);
+  const sections = state.imports.parsedAssetList?.sections ?? {};
+  return getSectionTotal(sections["保険"]) + toNumber(state.manual.insuranceSettings.manualAdjustment);
 }
 
 function getPensionCurrentBalance() {
