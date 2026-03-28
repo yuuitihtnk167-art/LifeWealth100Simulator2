@@ -954,7 +954,7 @@ function renderPensionSection() {
                 </select>
               </td>
               <td><input type="number" step="1" data-pension-id="${escapeHtml(row.id)}" data-key="splitAmount" value="${escapeHtml(String(row.splitAmount ?? 0))}"></td>
-              <td><input type="number" step="1" data-pension-id="${escapeHtml(row.id)}" data-key="lumpSumAmount" value="${escapeHtml(String(row.lumpSumAmount ?? 0))}"></td>
+              <td><input type="number" step="1" data-pension-id="${escapeHtml(row.id)}" data-key="lumpSumAmount" value="${escapeHtml(String(getPensionLumpSumAmount(row)))}"></td>
               <td><input data-pension-id="${escapeHtml(row.id)}" data-key="memo" value="${escapeHtml(row.memo || "")}"></td>
               <td><button type="button" class="danger-cell-button" data-remove-pension="${escapeHtml(row.id)}">削除</button></td>
             </tr>
@@ -1395,7 +1395,7 @@ function buildWarnings(snapshot) {
 
   state.manual.pensions.forEach((row) => {
     if (!row.splitAmount && row.payoutType === "split") warnings.push({ location: "年金", message: `${row.name || "年金"} の分割金額が未入力です。` });
-    if (!row.lumpSumAmount && row.payoutType === "lump") warnings.push({ location: "年金", message: `${row.name || "年金"} の一括受取額が未入力です。` });
+    if (row.payoutType === "lump" && !getPensionLumpSumAmount(row)) warnings.push({ location: "年金", message: `${row.name || "年金"} の一括受取額を計算できません。現在価値と拠出額を確認してください。` });
   });
 
   state.manual.loans.forEach((row) => {
@@ -1469,7 +1469,9 @@ function buildForecastTimeline(snapshot) {
       } else if (plan.payoutType === "split") {
         effectiveCash += plan.splitAmount;
       } else if (plan.payoutType === "lump" && !oneTimePensionPaidIds.has(plan.id)) {
-        effectiveCash += plan.lumpSumAmount;
+        const lumpSumAmount = getPensionLumpSumAmount(plan, true);
+        effectiveCash += lumpSumAmount;
+        plan.currentValue = Math.max(0, toNumber(plan.currentValue) - lumpSumAmount);
         oneTimePensionPaidIds.add(plan.id);
       }
     });
@@ -1988,6 +1990,22 @@ function getInsuranceCurrentBalance() {
 
 function getPensionCurrentBalance() {
   return state.manual.pensions.reduce((sum, row) => sum + toNumber(row.currentValue), 0);
+}
+
+function getPensionLumpSumAmount(plan, useProjectedCurrent = false) {
+  if (toNumber(plan.lumpSumAmount) > 0) return toNumber(plan.lumpSumAmount);
+  if (useProjectedCurrent) return toNumber(plan.currentValue);
+
+  let projectedBalance = toNumber(plan.currentValue);
+  if (!state.profile.birthDate) return projectedBalance;
+
+  const start = getSimulationStartDate();
+  const end = getSimulationEndDate(state.profile.birthDate, Math.max(state.profile.endAge, toNumber(plan.startAge)));
+  for (let cursor = new Date(start); cursor <= end; cursor = addMonths(cursor, 1)) {
+    if (getAgeAtMonthEnd(state.profile.birthDate, cursor) >= toNumber(plan.startAge)) break;
+    projectedBalance += toNumber(plan.contributionPerMonth);
+  }
+  return projectedBalance;
 }
 
 function getDollarInitialBalance(sections) {
