@@ -1414,7 +1414,7 @@ function buildForecastTimeline(snapshot) {
   let effectiveCash = snapshot.effectiveCash;
   let fundsBalance = snapshot.fundsBalance;
   let stocksBalance = snapshot.stocksBalance;
-  let bondAssets = structuredClone(state.manual.bondAssets).map((row) => ({ ...row }));
+  let bondAssets = structuredClone(state.manual.bondAssets).map((row) => ({ ...row, projectedValue: getBondDisplayValue(row) }));
   let insurancePolicies = structuredClone(state.manual.insurancePolicies).map((row) => ({ ...row }));
   let insuranceRunningBalance = snapshot.insuranceBalance;
   let pensionPlans = structuredClone(state.manual.pensions).map((row) => ({ ...row }));
@@ -1472,10 +1472,10 @@ function buildForecastTimeline(snapshot) {
     effectiveCash -= monthlyExpenses;
 
     bondAssets.forEach((row) => {
-      row.currentValue = getBondDisplayValue(row) * (1 + annualToMonthlyRate(row.rate || 0));
+      row.projectedValue *= 1 + annualToMonthlyRate(row.rate || 0);
       if (row.maturityDate && !row.isMatured && isSameMonthOrPast(row.maturityDate, cursor)) {
-        if (row.destination === "cash") effectiveCash += row.currentValue;
-        if (row.destination === "dollar") dollarUnits += convertYenToUsd(row.currentValue);
+        if (row.destination === "cash") effectiveCash += row.projectedValue;
+        if (row.destination === "dollar") dollarUnits += convertYenToUsd(row.projectedValue);
         row.isMatured = true;
       }
     });
@@ -1509,7 +1509,7 @@ function buildForecastTimeline(snapshot) {
       card.balance = Math.max(0, card.balance - Math.max(0, card.monthlyPayment - interest));
     });
 
-    const bondLikeAssets = bondAssets.filter((row) => !row.isMatured).reduce((sum, row) => sum + getBondDisplayValue(row), 0);
+    const bondLikeAssets = bondAssets.filter((row) => !row.isMatured).reduce((sum, row) => sum + row.projectedValue, 0);
     const pensionAssetBalance = pensionPlans.reduce((sum, row) => sum + row.currentValue, 0);
     const debtBalance = loans.reduce((sum, row) => sum + row.balance, 0) + cards.reduce((sum, row) => sum + row.balance, 0);
     const totalAssets = effectiveCash + dollarBalance + bondLikeAssets + fundsBalance + stocksBalance + insuranceRunningBalance + pensionAssetBalance;
