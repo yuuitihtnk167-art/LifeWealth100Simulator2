@@ -289,6 +289,7 @@ textarea { resize: vertical; min-height: 6.2rem; }
 }
 
 .data-table tr:last-child td { border-bottom: 0; }
+.data-table tr.timeline-phase-shift td { background: rgba(15, 106, 111, 0.08); }
 
 .data-table input, .data-table select {
   min-width: 7.5rem;

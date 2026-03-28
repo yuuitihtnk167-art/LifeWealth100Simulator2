@@ -1130,7 +1130,7 @@ function renderResearchSection() {
     <thead>
       <tr>
         <th>年月</th>
-        <th>フェーズ</th>
+        <th>年齢</th>
         <th>使える現金</th>
         <th>ドル</th>
         <th>債券扱い資産</th>
@@ -1146,11 +1146,12 @@ function renderResearchSection() {
       ${
         timelineRows.length
           ? timelineRows
-              .map(
-                (row) => `
-                  <tr>
+              .map((row, index) => {
+                const isPhaseShift = index > 0 && timelineRows[index - 1].phaseLabel !== row.phaseLabel;
+                return `
+                  <tr class="${isPhaseShift ? "timeline-phase-shift" : ""}">
                     <td>${escapeHtml(row.monthLabel)}</td>
-                    <td>${escapeHtml(row.phaseLabel)}</td>
+                    <td>${escapeHtml(formatAge(row.age))}</td>
                     <td>${formatCurrency(row.effectiveCash)}</td>
                     <td>${formatCurrency(row.dollarBalance)}</td>
                     <td>${formatCurrency(row.bondLikeAssets)}</td>
@@ -1161,8 +1162,8 @@ function renderResearchSection() {
                     <td>${formatCurrency(row.debtBalance)}</td>
                     <td>${formatCurrency(row.netWorth)}</td>
                   </tr>
-                `
-              )
+                `;
+              })
               .join("")
           : `<tr><td colspan="11">誕生日と入力条件を設定すると、月次推移を表示します。</td></tr>`
       }
@@ -2112,6 +2113,10 @@ function formatCurrencyShort(value) {
 
 function formatDecimal(value, digits = 2) {
   return new Intl.NumberFormat("ja-JP", { minimumFractionDigits: 0, maximumFractionDigits: digits }).format(toNumber(value));
+}
+
+function formatAge(value) {
+  return `${Math.max(0, Math.floor(toNumber(value)))}歳`;
 }
 
 function formatPercent(value) {
