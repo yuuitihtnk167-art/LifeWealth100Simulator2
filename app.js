@@ -112,15 +112,15 @@ function bindEvents() {
     state.profile.birthDate = event.target.value;
     saveAndRender();
   });
-  dom.inflationRate.addEventListener("input", (event) => {
+  dom.inflationRate.addEventListener("change", (event) => {
     state.assumptions.inflationRate = toNumber(event.target.value);
     saveAndRender();
   });
-  dom.usdJpyRate.addEventListener("input", (event) => {
+  dom.usdJpyRate.addEventListener("change", (event) => {
     state.assumptions.usdJpyRate = toNumber(event.target.value);
     saveAndRender();
   });
-  dom.endAge.addEventListener("input", (event) => {
+  dom.endAge.addEventListener("change", (event) => {
     state.profile.endAge = Math.max(1, Math.round(toNumber(event.target.value)));
     saveAndRender();
   });
@@ -336,6 +336,10 @@ function saveAndRender(statusMessage = "") {
   renderApp(statusMessage);
 }
 
+function saveDraft() {
+  saveState();
+}
+
 function renderApp(statusMessage = "") {
   renderTopForm();
   renderSummaryStrip();
@@ -485,7 +489,7 @@ function renderPhaseStartsForm() {
     .join("");
 
   dom.phaseStartsForm.querySelectorAll("[data-phase-start]").forEach((input) => {
-    input.addEventListener("input", (event) => {
+    input.addEventListener("change", (event) => {
       const key = event.target.dataset.phaseStart;
       state.phaseValues[key].startAge = Math.max(0, Math.round(toNumber(event.target.value)));
       saveAndRender();
@@ -535,7 +539,7 @@ function renderCashflowSections() {
   }).join("");
 
   dom.cashflowPhaseSections.querySelectorAll("[data-phase-field]").forEach((input) => {
-    input.addEventListener("input", (event) => {
+    input.addEventListener("change", (event) => {
       const phaseKey = event.target.dataset.phaseField;
       const kind = event.target.dataset.kind;
       const key = event.target.dataset.key;
@@ -702,7 +706,11 @@ function handleBondInput(event) {
   if (row.faceValue > 0 && row.currentPrice > 0) {
     row.currentValue = row.faceValue * row.currentPrice;
   }
-  saveAndRender();
+  if (event.type === "change") {
+    saveAndRender();
+  } else {
+    saveDraft();
+  }
 }
 
 function renderFundsSection() {
@@ -778,14 +786,20 @@ function renderInsuranceSection() {
   `;
 
   dom.insuranceTable.querySelectorAll("[data-insurance-id]").forEach((input) => {
-    input.addEventListener("input", (event) => {
+    const handler = (event) => {
       const row = state.manual.insurancePolicies.find((item) => item.id === event.target.dataset.insuranceId);
       if (!row) return;
       const key = event.target.dataset.key;
       row[key] = event.target.value;
       if (key === "currentValue" || key === "premiumPerMonth") row[key] = toNumber(row[key]);
-      saveAndRender();
-    });
+      if (event.type === "change") {
+        saveAndRender();
+      } else {
+        saveDraft();
+      }
+    };
+    input.addEventListener("input", handler);
+    input.addEventListener("change", handler);
   });
   dom.insuranceTable.querySelectorAll("[data-remove-insurance]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -864,7 +878,11 @@ function renderPensionSection() {
       if (["currentValue", "startAge", "contributionPerMonth", "splitAmount", "lumpSumAmount"].includes(key)) {
         row[key] = toNumber(row[key]);
       }
-      saveAndRender();
+      if (event.type === "change") {
+        saveAndRender();
+      } else {
+        saveDraft();
+      }
     };
     input.addEventListener("input", handler);
     input.addEventListener("change", handler);
@@ -1603,10 +1621,16 @@ function renderLabeledMetric(label, value) {
 function bindSimpleNumericInput(selector, path) {
   const input = document.querySelector(selector);
   if (!input) return;
-  input.addEventListener("input", (event) => {
+  const handler = (event) => {
     setByPath(state, path, toNumber(event.target.value));
-    saveAndRender();
-  });
+    if (event.type === "change") {
+      saveAndRender();
+    } else {
+      saveDraft();
+    }
+  };
+  input.addEventListener("input", handler);
+  input.addEventListener("change", handler);
 }
 
 function bindTableInputs(container, idAttribute, sourceArray, numericKeys) {
@@ -1618,7 +1642,11 @@ function bindTableInputs(container, idAttribute, sourceArray, numericKeys) {
       const key = event.target.dataset.key;
       row[key] = event.target.type === "checkbox" ? event.target.checked : event.target.value;
       if (numericKeys.includes(key)) row[key] = toNumber(row[key]);
-      saveAndRender();
+      if (event.type === "change") {
+        saveAndRender();
+      } else {
+        saveDraft();
+      }
     };
     input.addEventListener("input", handler);
     input.addEventListener("change", handler);
