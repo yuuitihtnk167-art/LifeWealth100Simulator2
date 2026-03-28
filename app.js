@@ -581,8 +581,11 @@ function renderPhaseStartsForm() {
 }
 
 function renderCashflowSections() {
-  dom.cashflowPhaseSections.innerHTML = PHASES.map((phase) => {
+  dom.cashflowPhaseSections.innerHTML = PHASES.map((phase, index) => {
     const values = state.phaseValues[phase.key];
+    const totalIncome = sumValues(values.incomes);
+    const totalExpenses = sumValues(values.expenses);
+    const monthlyBalance = totalIncome - totalExpenses;
     const incomes = INCOME_FIELDS.map(
       (field) => `
         <label class="field">
@@ -610,9 +613,12 @@ function renderCashflowSections() {
           </div>
           <span class="pill">月額入力</span>
         </div>
-        <div class="action-row">
-          <button type="button" class="ghost-button" data-copy-phase="${escapeHtml(phase.key)}">他フェーズへコピー</button>
+        <div class="form-grid form-grid-4">
+          ${renderLabeledMetric("収入合計", formatCurrency(totalIncome))}
+          ${renderLabeledMetric("支出合計", formatCurrency(totalExpenses))}
+          ${renderLabeledMetric("月次収支", formatCurrency(monthlyBalance))}
         </div>
+        ${index < PHASES.length - 1 ? `<div class="action-row"><button type="button" class="ghost-button" data-copy-phase="${escapeHtml(phase.key)}">下のフェーズへコピー</button></div>` : ""}
         <h3>収入</h3>
         <div class="form-grid form-grid-4">${incomes}</div>
         <h3>支出</h3>
@@ -642,8 +648,9 @@ function renderCashflowSections() {
 
 function copyPhaseToOthers(phaseKey) {
   const source = state.phaseValues[phaseKey];
-  PHASES.forEach((phase) => {
-    if (phase.key === phaseKey) return;
+  const sourceIndex = PHASES.findIndex((phase) => phase.key === phaseKey);
+  PHASES.forEach((phase, index) => {
+    if (index <= sourceIndex) return;
     state.phaseValues[phase.key].incomes = structuredClone(source.incomes);
     state.phaseValues[phase.key].expenses = structuredClone(source.expenses);
   });
@@ -829,7 +836,9 @@ function renderStocksSection() {
 }
 
 function renderInsuranceSection() {
+  const snapshot = state.computed.snapshot;
   dom.insuranceSettingsForm.innerHTML = `
+    ${renderLabeledMetric("合計残高", snapshot ? formatCurrency(snapshot.insuranceBalance) : "--")}
     ${renderNumericField("手動調整額", "insurance-adjustment", state.manual.insuranceSettings.manualAdjustment)}
     ${renderNumericField("想定利回り（年）", "insurance-return", state.manual.insuranceSettings.expectedReturn, 0.1)}
     <div class="field"><span>計算式</span><div class="pill">手動調整 + 積立 + 利回り</div></div>
