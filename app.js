@@ -310,7 +310,9 @@ function mergeWithDefault(candidate) {
       insuranceSettings: { ...base.manual.insuranceSettings, ...(candidate.manual?.insuranceSettings ?? {}) },
       dollarSavings: { ...base.manual.dollarSavings, ...(candidate.manual?.dollarSavings ?? {}) },
       bondAssets: [...(candidate.manual?.bondAssets ?? [])],
-      insurancePolicies: [...(candidate.manual?.insurancePolicies ?? [])],
+      insurancePolicies: [...(candidate.manual?.insurancePolicies ?? [])].filter(
+        (row) => !(toNumber(row.currentValue) > 0 && !toNumber(row.premiumPerMonth) && !row.endMonth && !row.memo)
+      ),
       pensions: [...(candidate.manual?.pensions ?? [])],
       loans: [...(candidate.manual?.loans ?? [])],
       cards: [...(candidate.manual?.cards ?? [])],
@@ -514,7 +516,7 @@ function renderAssetCards() {
     { label: "債券", value: snapshot.bondLikeAssets, view: "bonds", note: "現金から除外する資産を含む" },
     { label: "投資信託・ETF", value: snapshot.fundsBalance, view: "funds", note: "CSVから取得した現在残高" },
     { label: "株式", value: snapshot.stocksBalance, view: "stocks", note: "個別株の現在残高" },
-    { label: "保険", value: snapshot.insuranceBalance, view: "insurance", note: "CSV取込の現在価値ベース" },
+    { label: "保険", value: snapshot.insuranceBalance, view: "insurance", note: "手動調整と内訳入力ベース" },
     { label: "ドル積立", value: snapshot.dollarBalance, view: "dollar", note: "SBIネット銀行の米ドル普通を初期値化" },
     { label: "年金", value: snapshot.pensionBalance, view: "pension", note: "開始年齢と受給条件は手入力" },
     { label: "負債", value: state.computed.summary?.currentDebt ?? 0, view: "debt", note: "純資産計算に使用" },
@@ -827,12 +829,11 @@ function renderStocksSection() {
 }
 
 function renderInsuranceSection() {
-  const snapshot = state.computed.snapshot;
   dom.insuranceSettingsForm.innerHTML = `
-    ${renderLabeledMetric("現在残高", snapshot ? formatCurrency(snapshot.insuranceBalance) : "--")}
     ${renderNumericField("手動調整額", "insurance-adjustment", state.manual.insuranceSettings.manualAdjustment)}
     ${renderNumericField("想定利回り（年）", "insurance-return", state.manual.insuranceSettings.expectedReturn, 0.1)}
-    <div class="field"><span>計算式</span><div class="pill">現在価値 + 積立 + 利回り + 手動調整</div></div>
+    <div class="field"><span>計算式</span><div class="pill">手動調整 + 積立 + 利回り</div></div>
+    <div class="field"><span>補足</span><div class="pill">現在価値は使わず、内訳入力のみを反映</div></div>
   `;
   bindSimpleNumericInput("#insurance-adjustment", "manual.insuranceSettings.manualAdjustment");
   bindSimpleNumericInput("#insurance-return", "manual.insuranceSettings.expectedReturn");
@@ -841,7 +842,6 @@ function renderInsuranceSection() {
     <thead>
       <tr>
         <th>名称</th>
-        <th>現在価値</th>
         <th>保険料(円/月)</th>
         <th>終了年月</th>
         <th>メモ</th>
@@ -854,7 +854,6 @@ function renderInsuranceSection() {
           (row) => `
             <tr>
               <td><input data-insurance-id="${escapeHtml(row.id)}" data-key="name" value="${escapeHtml(row.name)}"></td>
-              <td><input type="number" step="1" data-insurance-id="${escapeHtml(row.id)}" data-key="currentValue" value="${escapeHtml(String(row.currentValue ?? 0))}"></td>
               <td><input type="number" step="1" data-insurance-id="${escapeHtml(row.id)}" data-key="premiumPerMonth" value="${escapeHtml(String(row.premiumPerMonth ?? 0))}"></td>
               <td><input type="month" data-insurance-id="${escapeHtml(row.id)}" data-key="endMonth" value="${escapeHtml(row.endMonth || "")}"></td>
               <td><input data-insurance-id="${escapeHtml(row.id)}" data-key="memo" value="${escapeHtml(row.memo || "")}"></td>
@@ -872,7 +871,7 @@ function renderInsuranceSection() {
       if (!row) return;
       const key = event.target.dataset.key;
       row[key] = event.target.value;
-      if (key === "currentValue" || key === "premiumPerMonth") row[key] = toNumber(row[key]);
+      if (key === "premiumPerMonth") row[key] = toNumber(row[key]);
       if (event.type === "change") {
         saveAndRender();
       } else {
@@ -1224,21 +1223,6 @@ function hydrateStateFromImports() {
   const sections = state.imports.parsedAssetList?.sections;
   if (!sections) return;
 
-  const insuranceItems = sections["保険"]?.items ?? [];
-  if (!state.manual.insurancePolicies.length) {
-    state.manual.insurancePolicies = insuranceItems.map((item) =>
-      createInsurancePolicy({
-        name: item["名称"] || "積立保険",
-        currentValue: parseMoney(item["現在価値"]),
-      })
-    );
-  } else {
-    insuranceItems.forEach((item) => {
-      const row = state.manual.insurancePolicies.find((policy) => policy.name === (item["名称"] || ""));
-      if (row) row.currentValue = parseMoney(item["現在価値"]);
-    });
-  }
-
   const pensionItems = sections["年金"]?.items ?? [];
   if (!state.manual.pensions.length) {
     state.manual.pensions = pensionItems.map((item) =>
@@ -1402,7 +1386,7 @@ function buildForecastTimeline(snapshot) {
   let fundsBalance = snapshot.fundsBalance;
   let stocksBalance = snapshot.stocksBalance;
   let bondAssets = structuredClone(state.manual.bondAssets).map((row) => ({ ...row }));
-  let insurancePolicies = structuredClone(state.manual.insurancePolicies).map((row) => ({ ...row }));
+  let insurancePolicies = structuredClone(state.manual.insurancePolicies).map((row) => ({ ...row, currentValue: 0 }));
   let pensionPlans = structuredClone(state.manual.pensions).map((row) => ({ ...row }));
   let dollarBalance = snapshot.dollarBalance;
   let loans = structuredClone(state.manual.loans).map((row) => ({ ...row }));
@@ -1923,10 +1907,14 @@ function seedSampleData() {
   state.manual.funds.monthlyContribution = 30000;
   state.manual.stocks.monthlyContribution = 10000;
   state.manual.dollarSavings.monthlyContribution = 15000;
-  if (state.manual.insurancePolicies[0]) {
-    state.manual.insurancePolicies[0].premiumPerMonth = 12000;
-    state.manual.insurancePolicies[0].endMonth = "2035-03";
-  }
+  state.manual.insurancePolicies = [
+    createInsurancePolicy({
+      name: "積立保険",
+      premiumPerMonth: 12000,
+      endMonth: "2035-03",
+      memo: "サンプル",
+    }),
+  ];
   if (state.manual.pensions[0]) {
     state.manual.pensions[0].startAge = 65;
     state.manual.pensions[0].splitAmount = 70000;
@@ -1958,7 +1946,7 @@ function getSectionTotal(section) {
 }
 
 function getInsuranceCurrentBalance() {
-  return state.manual.insurancePolicies.reduce((sum, row) => sum + toNumber(row.currentValue), 0) + toNumber(state.manual.insuranceSettings.manualAdjustment);
+  return toNumber(state.manual.insuranceSettings.manualAdjustment);
 }
 
 function getPensionCurrentBalance() {
