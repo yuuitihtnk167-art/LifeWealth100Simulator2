@@ -517,7 +517,7 @@ function renderAssetCards() {
     { label: "投資信託・ETF", value: snapshot.fundsBalance, view: "funds", note: "CSVから取得した現在残高" },
     { label: "株式", value: snapshot.stocksBalance, view: "stocks", note: "個別株の現在残高" },
     { label: "保険", value: snapshot.insuranceBalance, view: "insurance", note: "CSV保険残高と手動調整ベース" },
-    { label: "ドル積立", value: snapshot.dollarBalance, view: "dollar", note: "SBIネット銀行の米ドル普通を初期値化" },
+    { label: "ドル積立", value: snapshot.dollarBalance, view: "dollar", note: "USD/JPY現在レート固定で円換算" },
     { label: "年金", value: snapshot.pensionBalance, view: "pension", note: "開始年齢と受給条件は手入力" },
     { label: "負債", value: state.computed.summary?.currentDebt ?? 0, view: "debt", note: "純資産計算に使用" },
   ];
@@ -902,6 +902,8 @@ function renderDollarSection() {
   const snapshot = state.computed.snapshot;
   dom.dollarSettingsForm.innerHTML = `
     ${renderLabeledMetric("初期残高", snapshot ? formatCurrency(snapshot.dollarBalance) : "--")}
+    ${renderLabeledMetric("参考USD残高", snapshot ? formatDecimal(snapshot.dollarBalanceUsd, 2) + " USD" : "--")}
+    ${renderLabeledMetric("換算レート", `${formatDecimal(state.assumptions.usdJpyRate, 2)} 円/USD`)}
     ${renderNumericField("月々の積立額", "dollar-monthly", state.manual.dollarSavings.monthlyContribution)}
     ${renderNumericField("想定利回り（年）", "dollar-return", state.manual.dollarSavings.expectedReturn, 0.1)}
     ${renderNumericField("積立終了年齢", "dollar-end-age", state.manual.dollarSavings.endAge, 1)}
@@ -1252,8 +1254,13 @@ function hydrateStateFromImports() {
       (row) => row.name === candidate.name && row.institution === candidate.institution && row.sourceCategory === candidate.sourceCategory
     );
     if (existing) {
+      const shouldRefreshFaceValue =
+        !toNumber(existing.faceValue) || (toNumber(existing.currentPrice) === 1 && Math.abs(toNumber(existing.faceValue) - toNumber(existing.currentValue)) < 1);
       existing.currentValue = candidate.currentValue;
       existing.excludeFromCash = candidate.excludeFromCash;
+      existing.currency = "JPY";
+      if (shouldRefreshFaceValue) existing.faceValue = candidate.faceValue;
+      if (!toNumber(existing.currentPrice)) existing.currentPrice = candidate.currentPrice;
     } else {
       state.manual.bondAssets.push(candidate);
     }
@@ -1263,13 +1270,17 @@ function hydrateStateFromImports() {
 function buildImportedBondRows(sections) {
   const rows = [];
   (sections["債券"]?.items ?? []).forEach((item) => {
+    const importedValue = parseMoney(item["評価額"]);
     rows.push(
       createBondRow({
         name: item["銘柄名"] || "債券",
         institution: item["保有金融機関"] || "",
-        currentValue: parseMoney(item["評価額"]),
+        currentValue: importedValue,
         sourceCategory: "bonds",
         type: "bond",
+        currency: "JPY",
+        faceValue: importedValue,
+        currentPrice: 1,
         destination: "cash",
       })
     );
@@ -1281,28 +1292,35 @@ function buildImportedBondRows(sections) {
   });
 
   cashCandidates.forEach((item) => {
+    const importedValue = parseMoney(item["残高"]);
     rows.push(
       createBondRow({
         name: item["種類・名称"] || "現金除外資産",
         institution: item["保有金融機関"] || "",
-        currentValue: parseMoney(item["残高"]),
+        currentValue: importedValue,
         sourceCategory: "cash",
         type: /ビットコイン|Mona/i.test(item["種類・名称"] || "") ? "volatile" : "foreign",
         excludeFromCash: true,
-        currency: /米ドル/i.test(item["種類・名称"] || "") ? "USD" : "JPY",
+        currency: "JPY",
+        faceValue: importedValue,
+        currentPrice: 1,
         destination: /米ドル/i.test(item["種類・名称"] || "") ? "dollar" : "cash",
       })
     );
   });
 
   (sections["その他の資産"]?.items ?? []).forEach((item) => {
+    const importedValue = parseMoney(item["現在価値"]);
     rows.push(
       createBondRow({
         name: item["名称"] || "その他の資産",
         institution: item["保有金融機関"] || "",
-        currentValue: parseMoney(item["現在価値"]),
+        currentValue: importedValue,
         sourceCategory: "other",
         type: item["名称"]?.includes("金") ? "volatile" : "locked",
+        currency: "JPY",
+        faceValue: importedValue,
+        currentPrice: 1,
         destination: "keep",
       })
     );
@@ -1336,6 +1354,7 @@ function computeSnapshot() {
   const insuranceBalance = getInsuranceCurrentBalance();
   const pensionBalance = getPensionCurrentBalance();
   const dollarBalance = getDollarInitialBalance(sections);
+  const dollarBalanceUsd = convertYenToUsd(dollarBalance);
   const cashExcludedTotal =
     state.manual.bondAssets.reduce((sum, row) => (row.excludeFromCash ? sum + getBondDisplayValue(row) : sum), 0) + dollarBalance;
   const bondLikeAssets = state.manual.bondAssets.reduce((sum, row) => sum + getBondDisplayValue(row), 0);
@@ -1353,6 +1372,7 @@ function computeSnapshot() {
     insuranceBalance,
     pensionBalance,
     dollarBalance,
+    dollarBalanceUsd,
     averageBondRate,
   };
 }
@@ -1398,7 +1418,8 @@ function buildForecastTimeline(snapshot) {
   let insurancePolicies = structuredClone(state.manual.insurancePolicies).map((row) => ({ ...row }));
   let insuranceRunningBalance = snapshot.insuranceBalance;
   let pensionPlans = structuredClone(state.manual.pensions).map((row) => ({ ...row }));
-  let dollarBalance = snapshot.dollarBalance;
+  let dollarUnits = toNumber(snapshot.dollarBalanceUsd);
+  let dollarBalance = convertUsdToYen(dollarUnits);
   let loans = structuredClone(state.manual.loans).map((row) => ({ ...row }));
   let cards = structuredClone(state.manual.cards).map((row) => ({ ...row }));
   let monthsSinceStart = 0;
@@ -1425,7 +1446,7 @@ function buildForecastTimeline(snapshot) {
     }
     if (age < state.manual.dollarSavings.endAge) {
       effectiveCash -= state.manual.dollarSavings.monthlyContribution;
-      dollarBalance += state.manual.dollarSavings.monthlyContribution;
+      dollarUnits += convertYenToUsd(state.manual.dollarSavings.monthlyContribution);
     }
 
     insurancePolicies.forEach((policy) => {
@@ -1454,14 +1475,15 @@ function buildForecastTimeline(snapshot) {
       row.currentValue = getBondDisplayValue(row) * (1 + annualToMonthlyRate(row.rate || 0));
       if (row.maturityDate && !row.isMatured && isSameMonthOrPast(row.maturityDate, cursor)) {
         if (row.destination === "cash") effectiveCash += row.currentValue;
-        if (row.destination === "dollar") dollarBalance += row.currentValue;
+        if (row.destination === "dollar") dollarUnits += convertYenToUsd(row.currentValue);
         row.isMatured = true;
       }
     });
 
     fundsBalance *= 1 + annualToMonthlyRate(state.manual.funds.expectedReturn);
     stocksBalance *= 1 + annualToMonthlyRate(state.manual.stocks.expectedReturn);
-    dollarBalance *= 1 + annualToMonthlyRate(state.manual.dollarSavings.expectedReturn);
+    dollarUnits *= 1 + annualToMonthlyRate(state.manual.dollarSavings.expectedReturn);
+    dollarBalance = convertUsdToYen(dollarUnits);
 
     loans.forEach((loan) => {
       if (loan.balance <= 0) return;
@@ -2004,6 +2026,18 @@ function annualToMonthlyRate(annualPercent) {
   return (1 + annualRate) ** (1 / 12) - 1;
 }
 
+function getUsdJpyRate() {
+  return Math.max(0.01, toNumber(state.assumptions.usdJpyRate) || 0.01);
+}
+
+function convertYenToUsd(amountYen) {
+  return toNumber(amountYen) / getUsdJpyRate();
+}
+
+function convertUsdToYen(amountUsd) {
+  return toNumber(amountUsd) * getUsdJpyRate();
+}
+
 function parseJapaneseDate(text) {
   if (!text) return null;
   const [year, month, day] = String(text).split("/").map(Number);
@@ -2054,6 +2088,10 @@ function formatCurrencyShort(value) {
   if (Math.abs(number) >= 100000000) return `${(number / 100000000).toFixed(1)}億`;
   if (Math.abs(number) >= 10000) return `${(number / 10000).toFixed(0)}万`;
   return new Intl.NumberFormat("ja-JP").format(number);
+}
+
+function formatDecimal(value, digits = 2) {
+  return new Intl.NumberFormat("ja-JP", { minimumFractionDigits: 0, maximumFractionDigits: digits }).format(toNumber(value));
 }
 
 function formatPercent(value) {
