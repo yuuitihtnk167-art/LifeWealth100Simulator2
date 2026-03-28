@@ -132,6 +132,10 @@ function bindEvents() {
     state.manual.bondAssets.push(createBondRow());
     saveAndRender();
   });
+  document.querySelector("#sort-bond-rows").addEventListener("click", () => {
+    sortBondAssetsByMaturity();
+    saveAndRender("債券を償還日の早い順に並び替えました。");
+  });
   document.querySelector("#add-insurance-row").addEventListener("click", () => {
     state.manual.insurancePolicies.push(createInsurancePolicy());
     saveAndRender();
@@ -2024,6 +2028,22 @@ function sumValues(object) {
 function annualToMonthlyRate(annualPercent) {
   const annualRate = toNumber(annualPercent) / 100;
   return (1 + annualRate) ** (1 / 12) - 1;
+}
+
+function sortBondAssetsByMaturity() {
+  state.manual.bondAssets.sort((left, right) => {
+    const leftTime = getMaturitySortTime(left.maturityDate);
+    const rightTime = getMaturitySortTime(right.maturityDate);
+    if (leftTime !== rightTime) return leftTime - rightTime;
+    return String(left.name || "").localeCompare(String(right.name || ""), "ja");
+  });
+}
+
+function getMaturitySortTime(dateText) {
+  if (!dateText) return Number.POSITIVE_INFINITY;
+  const parsed = dateText.includes("/") ? parseJapaneseDate(dateText) : new Date(dateText);
+  if (!parsed || Number.isNaN(parsed.getTime())) return Number.POSITIVE_INFINITY;
+  return parsed.getTime();
 }
 
 function getUsdJpyRate() {
