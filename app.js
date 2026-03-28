@@ -1125,7 +1125,7 @@ function renderResearchSection() {
     },
   ]);
 
-  const timelineRows = state.computed.timeline.slice(0, 240);
+  const timelineRows = state.computed.timeline;
   dom.timelineTable.innerHTML = `
     <thead>
       <tr>
