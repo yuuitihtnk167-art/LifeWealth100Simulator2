@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>LifeWealth100 Simulator</title>
+    <meta
+      name="description"
+      content="マネーフォワードの資産CSVをもとに、100歳までの世帯資産を予測するローカル完結型Webアプリ"
+    >
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <div class="background-glow background-glow-a"></div>
+    <div class="background-glow background-glow-b"></div>
+    <div class="app-shell">
+      <header class="hero-panel">
+        <div class="hero-copy">
+          <p class="eyebrow">Household Forecast</p>
+          <h1>LifeWealth100 Simulator</h1>
+          <p class="hero-text">
+            マネーフォワードの資産データと手入力の前提条件から、100歳までの世帯資産を月次で予測します。
+            口座整理の都合は切り離し、生活に使える現金と長期資産の変化を確認できます。
+          </p>
+        </div>
+        <div class="hero-stats">
+          <div class="hero-stat">
+            <span class="label">純資産</span>
+            <strong id="hero-net-worth">--</strong>
+          </div>
+          <div class="hero-stat">
+            <span class="label">100歳時点</span>
+            <strong id="hero-future-worth">--</strong>
+          </div>
+          <div class="hero-stat">
+            <span class="label">初回不足月</span>
+            <strong id="hero-shortage">なし</strong>
+          </div>
+        </div>
+      </header>
+
+      <nav class="main-nav" aria-label="主な画面">
+        <button type="button" class="nav-chip is-active" data-view="dashboard">ホーム</button>
+        <button type="button" class="nav-chip" data-view="cashflow">収支</button>
+        <button type="button" class="nav-chip" data-view="bonds">債券</button>
+        <button type="button" class="nav-chip" data-view="funds">投資信託・ETF</button>
+        <button type="button" class="nav-chip" data-view="stocks">株式</button>
+        <button type="button" class="nav-chip" data-view="insurance">保険</button>
+        <button type="button" class="nav-chip" data-view="dollar">ドル積立</button>
+        <button type="button" class="nav-chip" data-view="pension">年金</button>
+        <button type="button" class="nav-chip" data-view="debt">負債</button>
+        <button type="button" class="nav-chip" data-view="research">調査</button>
+      </nav>
+
+      <main class="main-layout">
+        <section class="view-panel is-active" id="view-dashboard">
+          <div class="section-grid section-grid-dashboard">
+            <article class="panel">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">Profile</p>
+                  <h2>基本情報</h2>
+                </div>
+              </div>
+              <div class="form-grid form-grid-2">
+                <label class="field">
+                  <span>誕生日</span>
+                  <input id="birth-date" type="date">
+                </label>
+                <label class="field">
+                  <span>生活費インフレ率（年）</span>
+                  <input id="inflation-rate" type="number" min="-10" max="20" step="0.1">
+                </label>
+                <label class="field">
+                  <span>USD/JPY 想定レート</span>
+                  <input id="usd-jpy-rate" type="number" min="1" step="0.01">
+                </label>
+                <label class="field">
+                  <span>シミュレーション終了</span>
+                  <input id="end-age" type="number" min="1" max="120" step="1">
+                </label>
+              </div>
+            </article>
+
+            <article class="panel">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">Import</p>
+                  <h2>マネーフォワード取込</h2>
+                </div>
+              </div>
+              <div class="form-grid form-grid-2">
+                <label class="field">
+                  <span>資産一覧CSV</span>
+                  <input id="asset-list-file" type="file" accept=".csv,text/csv">
+                </label>
+                <label class="field">
+                  <span>資産推移CSV</span>
+                  <input id="asset-trend-file" type="file" accept=".csv,text/csv">
+                </label>
+              </div>
+              <div class="action-row">
+                <button type="button" class="primary-button" id="import-csv-button">CSVを読み込む</button>
+                <button type="button" class="ghost-button" id="seed-sample-button">入力例を流し込む</button>
+              </div>
+              <p class="inline-note" id="import-status">CSV未読込です。</p>
+            </article>
+
+            <article class="panel">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">Backup</p>
+                  <h2>バックアップ / 復元</h2>
+                </div>
+              </div>
+              <div class="action-row">
+                <button type="button" class="primary-button" id="backup-button">バックアップ保存</button>
+                <label class="ghost-button file-button">
+                  復元ファイルを選択
+                  <input id="restore-file" type="file" accept=".json,application/json">
+                </label>
+              </div>
+              <p class="inline-note">入力値、CSV原本、再分類結果、前提条件をまとめて保存します。</p>
+            </article>
+          </div>
+
+          <section class="summary-strip" id="summary-strip"></section>
+
+          <section class="panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Snapshot</p>
+                <h2>現在の資産構成</h2>
+              </div>
+            </div>
+            <div class="card-grid" id="asset-card-grid"></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Attention</p>
+                <h2>要確認項目</h2>
+              </div>
+            </div>
+            <div id="dashboard-warning-list" class="warning-list"></div>
+          </section>
+        </section>
+
+        <section class="view-panel" id="view-cashflow">
+          <article class="panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Life Phase</p>
+                <h2>フェーズ開始年齢</h2>
+              </div>
+            </div>
+            <div class="form-grid form-grid-4" id="phase-starts-form"></div>
+          </article>
+          <div id="cashflow-phase-sections" class="stack-grid"></div>
+        </section>
+
+        <section class="view-panel" id="view-bonds">
+          <article class="panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Bond Desk</p>
+                <h2>債券・現金から除外する資産</h2>
+              </div>
+              <button type="button" class="ghost-button" id="add-bond-row">行を追加</button>
+            </div>
+            <div class="metric-row" id="bond-metrics"></div>
+            <div class="table-wrap">
+              <table class="data-table" id="bond-table"></table>
+            </div>
+            <div class="table-wrap subtle-wrap">
+              <h3>償還済み</h3>
+              <table class="data-table compact-table" id="bond-matured-table"></table>
+            </div>
+          </article>
+        </section>
+
+        <section class="view-panel" id="view-funds">
+          <article class="panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Mutual Funds / ETF</p>
+                <h2>投資信託・ETF</h2>
+              </div>
+            </div>
+            <div class="form-grid form-grid-4" id="fund-settings-form"></div>
+            <div class="table-wrap">
+              <table class="data-table compact-table" id="fund-import-table"></table>
+            </div>
+          </article>
+        </section>
+
+        <section class="view-panel" id="view-stocks">
+          <article class="panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Stocks</p>
+                <h2>株式投資</h2>
+              </div>
+            </div>
+            <div class="form-grid form-grid-4" id="stock-settings-form"></div>
+            <div class="table-wrap">
+              <table class="data-table compact-table" id="stock-import-table"></table>
+            </div>
+          </article>
+        </section>
+
+        <section class="view-panel" id="view-insurance">
+          <article class="panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Savings Insurance</p>
+                <h2>積立保険</h2>
+              </div>
+              <button type="button" class="ghost-button" id="add-insurance-row">行を追加</button>
+            </div>
+            <div class="form-grid form-grid-4" id="insurance-settings-form"></div>
+            <div class="table-wrap">
+              <table class="data-table" id="insurance-table"></table>
+            </div>
+          </article>
+        </section>
+
+        <section class="view-panel" id="view-dollar">
+          <article class="panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">USD Savings</p>
+                <h2>ドル積立</h2>
+              </div>
+            </div>
+            <div class="form-grid form-grid-4" id="dollar-settings-form"></div>
+            <div class="table-wrap">
+              <table class="data-table compact-table" id="dollar-import-table"></table>
+            </div>
+          </article>
+        </section>
+
+        <section class="view-panel" id="view-pension">
+          <article class="panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Pension</p>
+                <h2>年金</h2>
+              </div>
+              <button type="button" class="ghost-button" id="add-pension-row">行を追加</button>
+            </div>
+            <div class="table-wrap">
+              <table class="data-table" id="pension-table"></table>
+            </div>
+          </article>
+        </section>
+
+        <section class="view-panel" id="view-debt">
+          <div class="stack-grid">
+            <article class="panel">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">Loan</p>
+                  <h2>住宅・自動車・その他ローン</h2>
+                </div>
+                <button type="button" class="ghost-button" id="add-loan-row">ローン追加</button>
+              </div>
+              <div class="table-wrap">
+                <table class="data-table" id="loan-table"></table>
+              </div>
+            </article>
+
+            <article class="panel">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">Card Debt</p>
+                  <h2>カード・分割・リボ</h2>
+                </div>
+                <button type="button" class="ghost-button" id="add-card-row">カード追加</button>
+              </div>
+              <div class="table-wrap">
+                <table class="data-table" id="card-table"></table>
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <section class="view-panel" id="view-research">
+          <article class="panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Research</p>
+                <h2>調査ページ</h2>
+              </div>
+            </div>
+            <div class="summary-strip" id="research-strip"></div>
+          </article>
+
+          <article class="panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Forecast</p>
+                <h2>推移グラフ</h2>
+              </div>
+            </div>
+            <div class="chart-grid">
+              <div class="chart-card">
+                <h3>総資産・純資産</h3>
+                <div class="chart-stage" id="networth-chart"></div>
+              </div>
+              <div class="chart-card">
+                <h3>使える現金</h3>
+                <div class="chart-stage" id="cash-chart"></div>
+              </div>
+            </div>
+          </article>
+
+          <article class="panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Warnings</p>
+                <h2>要確認一覧</h2>
+              </div>
+            </div>
+            <div id="research-warning-list" class="warning-list"></div>
+          </article>
+
+          <article class="panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Timeline</p>
+                <h2>月次推移</h2>
+              </div>
+            </div>
+            <div class="table-wrap timeline-wrap">
+              <table class="data-table compact-table" id="timeline-table"></table>
+            </div>
+          </article>
+        </section>
+      </main>
+    </div>
+
+    <script type="module" src="app.js"></script>
+  </body>
+</html>
