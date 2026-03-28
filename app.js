@@ -47,6 +47,7 @@ const SECTION_HEADERS = new Set([
 
 const state = loadState();
 let currentView = "dashboard";
+let lastFocusedControl = null;
 
 const dom = {
   birthDate: document.querySelector("#birth-date"),
@@ -96,6 +97,8 @@ computeProjection();
 renderApp();
 
 function bindEvents() {
+  document.addEventListener("focusin", trackFocusedControl, true);
+
   dom.navButtons.forEach((button) => {
     button.addEventListener("click", () => switchView(button.dataset.view));
   });
@@ -331,13 +334,91 @@ function saveState() {
 }
 
 function saveAndRender(statusMessage = "") {
+  const focusSnapshot = captureFocusSnapshot();
   computeProjection();
   saveState();
   renderApp(statusMessage);
+  restoreFocusSnapshot(focusSnapshot);
 }
 
 function saveDraft() {
   saveState();
+}
+
+function trackFocusedControl(event) {
+  const descriptor = describeFocusableElement(event.target);
+  if (descriptor) {
+    lastFocusedControl = descriptor;
+  }
+}
+
+function captureFocusSnapshot() {
+  const activeDescriptor = describeFocusableElement(document.activeElement);
+  return activeDescriptor || lastFocusedControl;
+}
+
+function restoreFocusSnapshot(snapshot) {
+  if (!snapshot) return;
+  const target = findFocusableElement(snapshot);
+  if (!target) return;
+  target.focus({ preventScroll: true });
+
+  if (
+    typeof snapshot.selectionStart === "number" &&
+    typeof snapshot.selectionEnd === "number" &&
+    typeof target.setSelectionRange === "function"
+  ) {
+    target.setSelectionRange(snapshot.selectionStart, snapshot.selectionEnd);
+  }
+}
+
+function describeFocusableElement(element) {
+  if (!(element instanceof HTMLElement)) return null;
+  if (!["INPUT", "SELECT", "TEXTAREA", "BUTTON"].includes(element.tagName)) return null;
+
+  const descriptor = {
+    tagName: element.tagName.toLowerCase(),
+  };
+
+  if (element.id) descriptor.id = element.id;
+  if (element.name) descriptor.name = element.name;
+
+  const datasetEntries = Object.entries(element.dataset ?? {}).filter(([, value]) => value !== "");
+  if (datasetEntries.length) descriptor.dataset = Object.fromEntries(datasetEntries);
+
+  if (typeof element.selectionStart === "number" && typeof element.selectionEnd === "number") {
+    descriptor.selectionStart = element.selectionStart;
+    descriptor.selectionEnd = element.selectionEnd;
+  }
+
+  if (!descriptor.id && !descriptor.name && !descriptor.dataset) return null;
+  return descriptor;
+}
+
+function findFocusableElement(snapshot) {
+  if (snapshot.id) {
+    return document.getElementById(snapshot.id);
+  }
+
+  let selector = snapshot.tagName || "input";
+  if (snapshot.name) {
+    selector += `[name="${escapeSelectorValue(snapshot.name)}"]`;
+  }
+
+  Object.entries(snapshot.dataset ?? {}).forEach(([key, value]) => {
+    selector += `[data-${datasetKeyToAttribute(key)}="${escapeSelectorValue(value)}"]`;
+  });
+
+  return document.querySelector(selector);
+}
+
+function datasetKeyToAttribute(key) {
+  return key.replace(/[A-Z]/g, (char) => `-${char.toLowerCase()}`);
+}
+
+function escapeSelectorValue(value) {
+  if (window.CSS?.escape) return window.CSS.escape(String(value));
+  return String(value).replaceAll("\\", "\\\\").replaceAll('"', '\\"');
 }
 
 function renderApp(statusMessage = "") {
