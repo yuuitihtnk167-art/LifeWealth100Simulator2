@@ -53,6 +53,7 @@ let pendingRenderFrame = 0;
 const dom = {
   birthDate: document.querySelector("#birth-date"),
   inflationRate: document.querySelector("#inflation-rate"),
+  marketRiseAdjustmentRate: document.querySelector("#market-rise-adjustment-rate"),
   usdJpyRate: document.querySelector("#usd-jpy-rate"),
   fetchUsdJpyRateButton: document.querySelector("#fetch-usd-jpy-rate"),
   usdJpyRateStatus: document.querySelector("#usd-jpy-rate-status"),
@@ -126,6 +127,9 @@ function bindEvents() {
   bindReactiveInput(dom.inflationRate, (event) => {
     state.assumptions.inflationRate = toNumber(event.target.value);
   });
+  bindReactiveInput(dom.marketRiseAdjustmentRate, (event) => {
+    state.assumptions.marketRiseAdjustmentRate = toNumber(event.target.value);
+  });
   bindReactiveInput(dom.usdJpyRate, (event) => {
     state.assumptions.usdJpyRate = toNumber(event.target.value);
     state.assumptions.usdJpyRateSource = "manual";
@@ -197,6 +201,7 @@ function createDefaultState() {
     },
     assumptions: {
       inflationRate: 2,
+      marketRiseAdjustmentRate: 1,
       usdJpyRate: 150,
       usdJpyRateSource: "manual",
       usdJpyRateReferenceDate: "",
@@ -532,6 +537,7 @@ function enhanceMoneyInputs() {
 function renderTopForm() {
   dom.birthDate.value = state.profile.birthDate;
   dom.inflationRate.value = state.assumptions.inflationRate ?? 2;
+  dom.marketRiseAdjustmentRate.value = state.assumptions.marketRiseAdjustmentRate ?? 1;
   dom.usdJpyRate.value = state.assumptions.usdJpyRate ?? 150;
   dom.endAge.value = state.profile.endAge ?? 100;
   renderUsdJpyRateStatus();
@@ -603,41 +609,43 @@ function renderSummaryStrip() {
   const snapshot = state.computed.snapshot;
   const summary = state.computed.summary;
   const futureAgeLabel = `${formatAge(state.profile.endAge || 100)}時点`;
-  const cards = [
-    {
-      label: "使える現金",
-      value: snapshot ? formatCurrency(snapshot.effectiveCash) : "--",
-      note: snapshot ? `${formatCurrency(snapshot.pointsAsCash)} をポイントから加算` : "",
-    },
-    {
-      label: "債券扱い資産",
-      value: snapshot ? formatCurrency(snapshot.bondLikeAssets) : "--",
-      note: snapshot ? `平均利率 ${formatPercent(snapshot.averageBondRate)}` : "",
-    },
-    {
-      label: "負債合計",
-      value: summary ? formatCurrency(summary.currentDebt) : "--",
-      note: summary ? `純資産 ${formatCurrency(summary.currentNetWorth)}` : "",
-    },
-    {
-      label: "100歳時点の純資産",
-      value: summary ? formatCurrency(summary.futureNetWorth) : "--",
-      note: summary?.firstShortageMonth ? `不足月 ${summary.firstShortageMonth}` : "不足なし",
-    },
-  ];
-  cards[cards.length - 1].label = `${futureAgeLabel}の純資産`;
+  if (dom.summaryStrip) {
+    const cards = [
+      {
+        label: "使える現金",
+        value: snapshot ? formatCurrency(snapshot.effectiveCash) : "--",
+        note: snapshot ? `${formatCurrency(snapshot.pointsAsCash)} をポイントから加算` : "",
+      },
+      {
+        label: "債券扱い資産",
+        value: snapshot ? formatCurrency(snapshot.bondLikeAssets) : "--",
+        note: snapshot ? `平均利率 ${formatPercent(snapshot.averageBondRate)}` : "",
+      },
+      {
+        label: "負債合計",
+        value: summary ? formatCurrency(summary.currentDebt) : "--",
+        note: summary ? `純資産 ${formatCurrency(summary.currentNetWorth)}` : "",
+      },
+      {
+        label: "100歳時点の純資産",
+        value: summary ? formatCurrency(summary.futureNetWorth) : "--",
+        note: summary?.firstShortageMonth ? `不足月 ${summary.firstShortageMonth}` : "不足なし",
+      },
+    ];
+    cards[cards.length - 1].label = `${futureAgeLabel}の純資産`;
 
-  dom.summaryStrip.innerHTML = cards
-    .map(
-      (card) => `
-        <div class="summary-card">
-          <span class="label">${escapeHtml(card.label)}</span>
-          <strong>${escapeHtml(card.value)}</strong>
-          <p class="inline-note">${escapeHtml(card.note || "")}</p>
-        </div>
-      `
-    )
-    .join("");
+    dom.summaryStrip.innerHTML = cards
+      .map(
+        (card) => `
+          <div class="summary-card">
+            <span class="label">${escapeHtml(card.label)}</span>
+            <strong>${escapeHtml(card.value)}</strong>
+            <p class="inline-note">${escapeHtml(card.note || "")}</p>
+          </div>
+        `
+      )
+      .join("");
+  }
 
   dom.heroNetWorth.textContent = summary ? formatCurrency(summary.currentNetWorth) : "--";
   dom.heroFutureWorth.textContent = summary ? formatCurrency(summary.futureNetWorth) : "--";
@@ -1274,10 +1282,12 @@ function handleBondInput(event) {
 
 function renderFundsSection() {
   const snapshot = state.computed.snapshot;
+  const effectiveReturn = toNumber(state.manual.funds.expectedReturn) + toNumber(state.assumptions.marketRiseAdjustmentRate);
   dom.fundSettingsForm.innerHTML = `
     ${renderLabeledMetric("残高", snapshot ? formatCurrency(snapshot.fundsBalance) : "--")}
     ${renderNumericField("月々の積立額", "fund-monthly", state.manual.funds.monthlyContribution)}
     ${renderNumericField("想定利回り（年）", "fund-return", state.manual.funds.expectedReturn, 0.1)}
+    ${renderLabeledMetric("実効想定利回り（年）", formatPercent(effectiveReturn))}
     ${renderNumericField("積立終了年齢", "fund-end-age", state.manual.funds.endAge, 1)}
   `;
   bindSimpleNumericInput("#fund-monthly", "manual.funds.monthlyContribution", parseMoney);
@@ -1290,10 +1300,12 @@ function renderFundsSection() {
 
 function renderStocksSection() {
   const snapshot = state.computed.snapshot;
+  const effectiveReturn = toNumber(state.manual.stocks.expectedReturn) + toNumber(state.assumptions.marketRiseAdjustmentRate);
   dom.stockSettingsForm.innerHTML = `
     ${renderLabeledMetric("残高", snapshot ? formatCurrency(snapshot.stocksBalance) : "--")}
     ${renderNumericField("月々の積立額", "stock-monthly", state.manual.stocks.monthlyContribution)}
     ${renderNumericField("想定利回り（年）", "stock-return", state.manual.stocks.expectedReturn, 0.1)}
+    ${renderLabeledMetric("実効想定利回り（年）", formatPercent(effectiveReturn))}
     ${renderNumericField("積立終了年齢", "stock-end-age", state.manual.stocks.endAge, 1)}
   `;
   bindSimpleNumericInput("#stock-monthly", "manual.stocks.monthlyContribution", parseMoney);
@@ -1700,19 +1712,51 @@ async function handleRestoreFile(event) {
   }
 }
 
-function downloadBackup() {
+async function downloadBackup() {
   const payload = {
     ...state,
     version: APP_VERSION,
     exportedAt: new Date().toISOString(),
   };
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const backupName = `lifewealth100-2-backup-${formatCompactDate(new Date())}.json`;
+  const backupText = JSON.stringify(payload, null, 2);
+
+  if (typeof window.showSaveFilePicker === "function") {
+    try {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: backupName,
+        types: [
+          {
+            description: "JSON バックアップ",
+            accept: {
+              "application/json": [".json"],
+            },
+          },
+        ],
+      });
+      const writable = await handle.createWritable();
+      await writable.write(backupText);
+      await writable.close();
+      renderImportStatus(`バックアップを保存しました: ${backupName}`);
+    } catch (error) {
+      if (error?.name === "AbortError") {
+        renderImportStatus("バックアップ保存をキャンセルしました。");
+        return;
+      }
+      console.error(error);
+      renderImportStatus(`バックアップ保存に失敗しました: ${error.message}`);
+    }
+    return;
+  }
+
+  const blob = new Blob([backupText], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
-  anchor.download = `lifewealth100-backup-${formatCompactDate(new Date())}.json`;
+  anchor.download = backupName;
   anchor.click();
   URL.revokeObjectURL(url);
+  renderImportStatus(`このブラウザでは保存先確認に未対応のため、通常のダウンロードを開始しました: ${backupName}`);
 }
 
 function hydrateStateFromImports() {
@@ -1890,6 +1934,7 @@ function buildForecastTimeline(snapshot) {
   const start = getSimulationStartDate();
   const end = getSimulationEndDate(state.profile.birthDate, state.profile.endAge);
   const monthlyInflationRate = annualToMonthlyRate(state.assumptions.inflationRate);
+  const marketRiseAdjustmentRate = toNumber(state.assumptions.marketRiseAdjustmentRate);
   const timeline = [];
 
   let effectiveCash = snapshot.effectiveCash;
@@ -1989,8 +2034,8 @@ function buildForecastTimeline(snapshot) {
       }
     });
 
-    fundsBalance *= 1 + annualToMonthlyRate(state.manual.funds.expectedReturn);
-    stocksBalance *= 1 + annualToMonthlyRate(state.manual.stocks.expectedReturn);
+    fundsBalance *= 1 + annualToMonthlyRate(toNumber(state.manual.funds.expectedReturn) + marketRiseAdjustmentRate);
+    stocksBalance *= 1 + annualToMonthlyRate(toNumber(state.manual.stocks.expectedReturn) + marketRiseAdjustmentRate);
     dollarUnits *= 1 + annualToMonthlyRate(state.manual.dollarSavings.expectedReturn);
     dollarBalance = convertUsdToYen(dollarUnits);
 

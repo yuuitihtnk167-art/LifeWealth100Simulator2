@@ -62,7 +62,6 @@
             <article class="panel">
               <div class="panel-heading">
                 <div>
-                  <p class="eyebrow">Profile</p>
                   <h2>基本情報</h2>
                 </div>
               </div>
@@ -84,6 +83,11 @@
                   <p class="inline-note compact-note" id="usd-jpy-rate-status">手入力値です。必要なら最新公表レートを取得できます。</p>
                 </label>
                 <label class="field">
+                  <span>相場上昇補正率（年）</span>
+                  <input id="market-rise-adjustment-rate" type="number" min="-10" max="20" step="0.1">
+                  <p class="inline-note compact-note">生活費インフレ率と完全連動ではなく、相場上昇を簡易補正します。投資信託・株式の想定利回りに加算します。</p>
+                </label>
+                <label class="field">
                   <span>シミュレーション終了</span>
                   <input id="end-age" type="number" min="1" max="120" step="1">
                 </label>
@@ -93,7 +97,6 @@
             <article class="panel">
               <div class="panel-heading">
                 <div>
-                  <p class="eyebrow">Import</p>
                   <h2>マネーフォワード取込</h2>
                 </div>
               </div>
@@ -117,7 +120,6 @@
             <article class="panel">
               <div class="panel-heading">
                 <div>
-                  <p class="eyebrow">Backup</p>
                   <h2>バックアップ / 復元</h2>
                 </div>
               </div>
@@ -132,12 +134,9 @@
             </article>
           </div>
 
-          <section class="summary-strip" id="summary-strip"></section>
-
           <section class="panel">
             <div class="panel-heading">
               <div>
-                <p class="eyebrow">Snapshot</p>
                 <h2>現在の資産構成</h2>
               </div>
             </div>
@@ -147,7 +146,6 @@
           <section class="panel">
             <div class="panel-heading">
               <div>
-                <p class="eyebrow">Attention</p>
                 <h2>要確認項目</h2>
               </div>
             </div>
