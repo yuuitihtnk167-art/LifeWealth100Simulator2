@@ -46,6 +46,7 @@ const SECTION_HEADERS = new Set([
 ]);
 
 const state = loadState();
+hydrateStateFromImports();
 let currentView = "dashboard";
 let lastFocusedControl = null;
 let pendingRenderFrame = 0;
@@ -62,6 +63,7 @@ const dom = {
   assetTrendFile: document.querySelector("#asset-trend-file"),
   importButton: document.querySelector("#import-csv-button"),
   importStatus: document.querySelector("#import-status"),
+  importDateLabel: document.querySelector("#import-date-label"),
   backupButton: document.querySelector("#backup-button"),
   restoreFile: document.querySelector("#restore-file"),
   seedSampleButton: document.querySelector("#seed-sample-button"),
@@ -397,8 +399,7 @@ function trackFocusedControl(event) {
 }
 
 function captureFocusSnapshot() {
-  const activeDescriptor = describeFocusableElement(document.activeElement);
-  return activeDescriptor || lastFocusedControl;
+  return describeFocusableElement(document.activeElement);
 }
 
 function restoreFocusSnapshot(snapshot) {
@@ -591,9 +592,12 @@ async function fetchLatestUsdJpyRate() {
 
 function renderImportStatus(statusMessage = "") {
   const importedAt = state.imports.importedAt ? formatDateTime(state.imports.importedAt) : "未読込";
+  if (dom.importDateLabel) {
+    dom.importDateLabel.textContent = `取込日: ${importedAt}`;
+  }
   dom.importStatus.textContent =
     statusMessage ||
-    `資産一覧: ${state.imports.assetListRaw ? "読込済み" : "未読込"} / 資産推移: ${state.imports.assetTrendRaw ? "読込済み" : "未読込"} / 更新: ${importedAt}`;
+    `資産一覧: ${state.imports.assetListRaw ? "読込済み" : "未読込"} / 資産推移: ${state.imports.assetTrendRaw ? "読込済み" : "未読込"}`;
 }
 
 function renderSummaryStrip() {
@@ -829,11 +833,11 @@ function renderImportedSectionTable(section, options = {}) {
 }
 
 function getCashItemHandlingLabel(item) {
-  const name = String(item["種類・名称"] ?? "");
-  const institution = String(item["保有金融機関"] ?? "");
-  const matcher = `${name}${institution}`;
   if (isDollarManagedCashItem(item)) return "現金から除外し、ドル資産として別管理";
-  if (/ビットコイン|Mona|円仕組/i.test(matcher)) return "現金から除外";
+  const importedCashAsset = findImportedCashAssetRow(item);
+  if (importedCashAsset) return getCashExcludedHandlingLabel(importedCashAsset);
+  const candidate = getImportedCashCandidateConfig(item);
+  if (candidate) return candidate.destination === "dollar" ? "現金から除外し、ドル資産として別管理" : "現金から除外";
   return "現金として計上";
 }
 
@@ -843,7 +847,7 @@ function renderCashExcludedTable(rows, dollarManagedItems, snapshot) {
     amount: getBondDisplayValue(row),
     institution: row.institution || "-",
     source: getCashExcludedSourceLabel(row),
-    handling: row.destination === "dollar" ? "ドル資産として別管理" : "現金から除外",
+    handling: getCashExcludedHandlingLabel(row),
   }));
 
   if (dollarManagedItems.length) {
@@ -853,7 +857,7 @@ function renderCashExcludedTable(rows, dollarManagedItems, snapshot) {
         amount: parseMoney(item["残高"]),
         institution: item["保有金融機関"] || "-",
         source: "現金カテゴリ",
-        handling: "ドル資産として別管理",
+        handling: "現金から除外し、ドル資産として別管理",
       }))
     );
   } else if (snapshot?.dollarBalance) {
@@ -862,7 +866,7 @@ function renderCashExcludedTable(rows, dollarManagedItems, snapshot) {
       amount: snapshot.dollarBalance,
       institution: "-",
       source: "現金カテゴリ",
-      handling: "使える現金では別管理",
+      handling: "現金から除外し、ドル資産として別管理",
     });
   }
 
@@ -1165,8 +1169,8 @@ function renderBondSection() {
         .map(
           (row) => `
             <tr>
-              <td><input data-bond-id="${escapeHtml(row.id)}" data-key="name" value="${escapeHtml(row.name)}"></td>
-              <td><input data-bond-id="${escapeHtml(row.id)}" data-key="institution" value="${escapeHtml(row.institution)}"></td>
+              <td>${renderTextInput(`data-bond-id="${escapeHtml(row.id)}" data-key="name"`, row.name)}</td>
+              <td>${renderTextInput(`data-bond-id="${escapeHtml(row.id)}" data-key="institution"`, row.institution)}</td>
               <td>
                 <select data-bond-id="${escapeHtml(row.id)}" data-key="type">
                   ${[
@@ -1333,10 +1337,10 @@ function renderInsuranceSection() {
         .map(
           (row) => `
             <tr>
-              <td><input data-insurance-id="${escapeHtml(row.id)}" data-key="name" value="${escapeHtml(row.name)}"></td>
+              <td>${renderTextInput(`data-insurance-id="${escapeHtml(row.id)}" data-key="name"`, row.name)}</td>
               <td><input type="number" step="1" data-insurance-id="${escapeHtml(row.id)}" data-key="premiumPerMonth" value="${escapeHtml(String(row.premiumPerMonth ?? 0))}"></td>
               <td><input type="month" data-insurance-id="${escapeHtml(row.id)}" data-key="endMonth" value="${escapeHtml(row.endMonth || "")}"></td>
-              <td><input data-insurance-id="${escapeHtml(row.id)}" data-key="memo" value="${escapeHtml(row.memo || "")}"></td>
+              <td>${renderTextInput(`data-insurance-id="${escapeHtml(row.id)}" data-key="memo"`, row.memo || "")}</td>
               <td><button type="button" class="danger-cell-button" data-remove-insurance="${escapeHtml(row.id)}">削除</button></td>
             </tr>
           `
@@ -1354,6 +1358,8 @@ function renderInsuranceSection() {
       if (key === "premiumPerMonth") row[key] = parseMoney(row[key]);
       if (event.type === "change") {
         saveAndRender();
+      } else if (shouldDeferTextInputRender(event)) {
+        return;
       } else {
         scheduleRender();
       }
@@ -1410,7 +1416,7 @@ function renderPensionSection() {
         .map(
           (row) => `
             <tr>
-              <td><input data-pension-id="${escapeHtml(row.id)}" data-key="name" value="${escapeHtml(row.name)}"></td>
+              <td>${renderTextInput(`data-pension-id="${escapeHtml(row.id)}" data-key="name"`, row.name)}</td>
               <td><input type="number" step="1" data-pension-id="${escapeHtml(row.id)}" data-key="currentValue" value="${escapeHtml(String(row.currentValue ?? 0))}"></td>
               <td><input type="number" min="0" max="120" step="1" data-pension-id="${escapeHtml(row.id)}" data-key="startAge" value="${escapeHtml(String(row.startAge ?? 65))}"></td>
               <td><input type="number" step="1" data-pension-id="${escapeHtml(row.id)}" data-key="contributionPerMonth" value="${escapeHtml(String(row.contributionPerMonth ?? 0))}"></td>
@@ -1422,7 +1428,7 @@ function renderPensionSection() {
               </td>
               <td><input type="number" step="1" data-pension-id="${escapeHtml(row.id)}" data-key="splitAmount" value="${escapeHtml(String(row.splitAmount ?? 0))}"></td>
               <td><input type="number" step="1" data-pension-id="${escapeHtml(row.id)}" data-key="lumpSumAmount" value="${escapeHtml(String(getPensionLumpSumAmount(row)))}"></td>
-              <td><input data-pension-id="${escapeHtml(row.id)}" data-key="memo" value="${escapeHtml(row.memo || "")}"></td>
+              <td>${renderTextInput(`data-pension-id="${escapeHtml(row.id)}" data-key="memo"`, row.memo || "")}</td>
               <td><button type="button" class="danger-cell-button" data-remove-pension="${escapeHtml(row.id)}">削除</button></td>
             </tr>
           `
@@ -1445,6 +1451,8 @@ function renderPensionSection() {
       }
       if (event.type === "change") {
         saveAndRender();
+      } else if (shouldDeferTextInputRender(event)) {
+        return;
       } else {
         scheduleRender();
       }
@@ -1481,7 +1489,7 @@ function renderDebtSection() {
         .map(
           (row) => `
             <tr>
-              <td><input data-loan-id="${escapeHtml(row.id)}" data-key="name" value="${escapeHtml(row.name)}"></td>
+              <td>${renderTextInput(`data-loan-id="${escapeHtml(row.id)}" data-key="name"`, row.name)}</td>
               <td>
                 <select data-loan-id="${escapeHtml(row.id)}" data-key="type">
                   ${["住宅ローン", "自動車ローン", "その他ローン"]
@@ -1493,7 +1501,7 @@ function renderDebtSection() {
               <td><input type="number" step="0.01" data-loan-id="${escapeHtml(row.id)}" data-key="annualRate" value="${escapeHtml(String(row.annualRate ?? 0))}"></td>
               <td><input type="number" step="1" data-loan-id="${escapeHtml(row.id)}" data-key="monthlyPayment" value="${escapeHtml(String(row.monthlyPayment ?? 0))}"></td>
               <td><input type="number" step="1" data-loan-id="${escapeHtml(row.id)}" data-key="bonusPayment" value="${escapeHtml(String(row.bonusPayment ?? 0))}"></td>
-              <td><input data-loan-id="${escapeHtml(row.id)}" data-key="bonusMonths" value="${escapeHtml(row.bonusMonths || "")}"></td>
+              <td>${renderTextInput(`data-loan-id="${escapeHtml(row.id)}" data-key="bonusMonths"`, row.bonusMonths || "")}</td>
               <td><input type="month" data-loan-id="${escapeHtml(row.id)}" data-key="endMonth" value="${escapeHtml(row.endMonth || "")}"></td>
               <td><input type="checkbox" data-loan-id="${escapeHtml(row.id)}" data-key="includedInExpenses" ${row.includedInExpenses ? "checked" : ""}></td>
               <td><button type="button" class="danger-cell-button" data-remove-loan="${escapeHtml(row.id)}">削除</button></td>
@@ -1522,7 +1530,7 @@ function renderDebtSection() {
         .map(
           (row) => `
             <tr>
-              <td><input data-card-id="${escapeHtml(row.id)}" data-key="name" value="${escapeHtml(row.name)}"></td>
+              <td>${renderTextInput(`data-card-id="${escapeHtml(row.id)}" data-key="name"`, row.name)}</td>
               <td><input type="number" step="1" data-card-id="${escapeHtml(row.id)}" data-key="balance" value="${escapeHtml(String(row.balance ?? 0))}"></td>
               <td><input type="month" data-card-id="${escapeHtml(row.id)}" data-key="dueMonth" value="${escapeHtml(row.dueMonth || "")}"></td>
               <td>
@@ -1563,7 +1571,6 @@ function renderResearchSection() {
   const cashAnnotations = buildCashChartAnnotations(timelineRows);
 
   dom.researchStrip.innerHTML = [
-    { label: "取込日", value: state.imports.importedAt ? formatDateTime(state.imports.importedAt) : "未取込" },
     { label: "現在総資産", value: summary ? formatCurrency(summary.currentAssets) : "--" },
     { label: "現在純資産", value: summary ? formatCurrency(summary.currentNetWorth) : "--" },
     { label: "不足回避に必要な改善", value: summary?.monthlyImprovementNeeded ? formatCurrency(summary.monthlyImprovementNeeded) : "0円" },
@@ -1693,6 +1700,7 @@ async function handleRestoreFile(event) {
     const text = await file.text();
     const restored = mergeWithDefault(JSON.parse(text));
     Object.assign(state, restored);
+    hydrateStateFromImports();
     saveAndRender("バックアップを復元しました。");
   } catch (error) {
     console.error(error);
@@ -1768,9 +1776,16 @@ function hydrateStateFromImports() {
     });
   }
 
-  buildImportedBondRows(sections).forEach((candidate) => {
+  const importedCandidates = buildImportedBondRows(sections);
+  const importedKeys = new Set(importedCandidates.map((candidate) => getImportedBondRowKey(candidate)));
+
+  state.manual.bondAssets = state.manual.bondAssets.filter(
+    (row) => !["bonds", "cash", "other"].includes(row.sourceCategory) || importedKeys.has(getImportedBondRowKey(row))
+  );
+
+  importedCandidates.forEach((candidate) => {
     const existing = state.manual.bondAssets.find(
-      (row) => row.name === candidate.name && row.institution === candidate.institution && row.sourceCategory === candidate.sourceCategory
+      (row) => getImportedBondRowKey(row) === getImportedBondRowKey(candidate)
     );
     if (existing) {
       const shouldRefreshFaceValue =
@@ -1778,6 +1793,7 @@ function hydrateStateFromImports() {
       existing.currentValue = candidate.currentValue;
       existing.excludeFromCash = candidate.excludeFromCash;
       existing.currency = "JPY";
+      existing.type = candidate.type;
       if (shouldRefreshFaceValue) existing.faceValue = candidate.faceValue;
       if (!toNumber(existing.currentPrice)) existing.currentPrice = candidate.currentPrice;
     } else {
@@ -1805,12 +1821,9 @@ function buildImportedBondRows(sections) {
     );
   });
 
-  const cashCandidates = (sections["預金・現金・暗号資産"]?.items ?? []).filter((item) => {
-    const name = `${item["種類・名称"] ?? ""}${item["保有金融機関"] ?? ""}`;
-    return /米ドル定期|ビットコイン|Mona|円仕組|米ドル 現金/i.test(name);
-  });
-
-  cashCandidates.forEach((item) => {
+  (sections["預金・現金・暗号資産"]?.items ?? []).forEach((item) => {
+    const candidateConfig = getImportedCashCandidateConfig(item);
+    if (!candidateConfig) return;
     const importedValue = parseMoney(item["残高"]);
     rows.push(
       createBondRow({
@@ -1818,12 +1831,12 @@ function buildImportedBondRows(sections) {
         institution: item["保有金融機関"] || "",
         currentValue: importedValue,
         sourceCategory: "cash",
-        type: /ビットコイン|Mona/i.test(item["種類・名称"] || "") ? "volatile" : "foreign",
-        excludeFromCash: true,
+        type: candidateConfig.type,
+        excludeFromCash: candidateConfig.excludeFromCash,
         currency: "JPY",
         faceValue: importedValue,
         currentPrice: 1,
-        destination: /米ドル/i.test(item["種類・名称"] || "") ? "dollar" : "cash",
+        destination: candidateConfig.destination,
       })
     );
   });
@@ -2562,6 +2575,10 @@ function renderMoneyInput(attributes, value) {
   return `<input ${attributes} type="text" inputmode="decimal" data-input-kind="money" autocomplete="off" spellcheck="false" value="${escapeHtml(formatMoneyInputValue(value))}">`;
 }
 
+function renderTextInput(attributes, value) {
+  return `<input ${attributes} type="text" lang="ja" inputmode="text" autocomplete="off" autocapitalize="off" spellcheck="false" value="${escapeHtml(String(value ?? ""))}">`;
+}
+
 function renderNumericField(label, id, value, step = 1) {
   return `
     <label class="field">
@@ -2595,6 +2612,16 @@ function bindSimpleNumericInput(selector, path, parser = toNumber) {
   input.addEventListener("change", handler);
 }
 
+function shouldDeferTextInputRender(event) {
+  if (event.type !== "input") return false;
+  if (event.isComposing) return true;
+  const target = event.target;
+  if (target instanceof HTMLTextAreaElement) return true;
+  if (!(target instanceof HTMLInputElement)) return false;
+  if (target.dataset.inputKind === "money") return false;
+  return ["text", "search", "tel", "url", "email", "password"].includes((target.type || "text").toLowerCase());
+}
+
 function bindTableInputs(container, idAttribute, sourceArray, numericKeys, moneyKeys = []) {
   container.querySelectorAll(`[${idAttribute}]`).forEach((input) => {
     const handler = (event) => {
@@ -2606,6 +2633,8 @@ function bindTableInputs(container, idAttribute, sourceArray, numericKeys, money
       if (numericKeys.includes(key)) row[key] = moneyKeys.includes(key) ? parseMoney(row[key]) : toNumber(row[key]);
       if (event.type === "change") {
         saveAndRender();
+      } else if (shouldDeferTextInputRender(event)) {
+        return;
       } else {
         scheduleRender();
       }
@@ -2872,6 +2901,34 @@ function createCashEvent(label, amount) {
     label,
     amount: toNumber(amount),
   };
+}
+
+function getImportedBondRowKey(row) {
+  return `${row.sourceCategory || ""}::${row.name || ""}::${row.institution || ""}`;
+}
+
+function getImportedCashCandidateConfig(item) {
+  const name = `${item["種類・名称"] ?? ""}${item["保有金融機関"] ?? ""}`;
+  if (/米ドル定期|米ドル 現金/i.test(name)) {
+    return { type: "foreign", excludeFromCash: true, destination: "dollar" };
+  }
+  if (/ビットコイン|Mona/i.test(name)) {
+    return { type: "volatile", excludeFromCash: true, destination: "cash" };
+  }
+  if (/円仕組/i.test(name)) {
+    return { type: "foreign", excludeFromCash: true, destination: "cash" };
+  }
+  return null;
+}
+
+function findImportedCashAssetRow(item) {
+  const name = String(item["種類・名称"] ?? "");
+  const institution = String(item["保有金融機関"] ?? "");
+  return state.manual.bondAssets.find((row) => row.sourceCategory === "cash" && row.name === name && row.institution === institution);
+}
+
+function getCashExcludedHandlingLabel(row) {
+  return row.destination === "dollar" ? "現金から除外し、ドル資産として別管理" : "現金から除外";
 }
 
 function isDollarManagedCashItem(item) {
