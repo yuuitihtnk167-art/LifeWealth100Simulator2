@@ -66,7 +66,6 @@ const dom = {
   backupButton: document.querySelector("#backup-button"),
   restoreFile: document.querySelector("#restore-file"),
   seedSampleButton: document.querySelector("#seed-sample-button"),
-  summaryStrip: document.querySelector("#summary-strip"),
   assetCardGrid: document.querySelector("#asset-card-grid"),
   dashboardWarningList: document.querySelector("#dashboard-warning-list"),
   researchWarningList: document.querySelector("#research-warning-list"),
@@ -600,48 +599,7 @@ function renderImportStatus(statusMessage = "") {
 }
 
 function renderSummaryStrip() {
-  const snapshot = state.computed.snapshot;
   const summary = state.computed.summary;
-  const futureAgeLabel = `${formatAge(state.profile.endAge || 100)}時点`;
-  const futureNetWorthLabel = `${futureAgeLabel}の純資産`;
-  if (dom.summaryStrip) {
-    const cards = [
-      {
-        label: "使える現金",
-        value: snapshot ? formatCurrency(snapshot.effectiveCash) : "--",
-        note: snapshot ? `${formatCurrency(snapshot.pointsAsCash)} をポイントから加算` : "",
-      },
-      {
-        label: "債券扱い資産",
-        value: snapshot ? formatCurrency(snapshot.bondLikeAssets) : "--",
-        note: snapshot ? `平均利率 ${formatPercent(snapshot.averageBondRate)}` : "",
-      },
-      {
-        label: "負債合計",
-        value: summary ? formatCurrency(summary.currentDebt) : "--",
-        note: summary ? `純資産 ${formatCurrency(summary.currentNetWorth)}` : "",
-      },
-      {
-        label: "100歳時点の純資産",
-        value: summary ? formatCurrency(summary.futureNetWorth) : "--",
-        note: summary?.firstShortageMonth ? `不足月 ${summary.firstShortageMonth}` : "不足なし",
-      },
-    ];
-    cards[cards.length - 1].label = futureNetWorthLabel;
-
-    dom.summaryStrip.innerHTML = cards
-      .map(
-        (card) => `
-          <div class="summary-card">
-            <span class="label">${escapeHtml(card.label)}</span>
-            <strong>${escapeHtml(card.value)}</strong>
-            <p class="inline-note">${escapeHtml(card.note || "")}</p>
-          </div>
-        `
-      )
-      .join("");
-  }
-
   dom.heroNetWorth.textContent = summary ? formatCurrency(summary.currentNetWorth) : "--";
   dom.heroFutureWorth.textContent = summary ? formatCurrency(summary.futureNetWorth) : "--";
   dom.heroShortage.textContent = summary?.firstShortageMonth || "なし";
