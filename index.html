@@ -8,6 +8,10 @@
       name="description"
       content="マネーフォワードの資産CSVをもとに、100歳までの世帯資産を予測するローカル完結型Webアプリ"
     >
+    <link rel="icon" type="image/png" sizes="32x32" href="assets/icons/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="192x192" href="assets/icons/icon-192.png">
+    <link rel="icon" type="image/png" sizes="512x512" href="assets/icons/icon-512.png">
+    <link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png">
     <link rel="stylesheet" href="styles.css">
   </head>
   <body>
@@ -73,7 +77,11 @@
                 </label>
                 <label class="field">
                   <span>USD/JPY 現在レート</span>
-                  <input id="usd-jpy-rate" type="number" min="1" step="0.01">
+                  <div class="field-inline">
+                    <input id="usd-jpy-rate" type="number" min="1" step="0.01">
+                    <button type="button" class="ghost-button inline-field-button" id="fetch-usd-jpy-rate">最新レート取得</button>
+                  </div>
+                  <p class="inline-note compact-note" id="usd-jpy-rate-status">手入力値です。必要なら最新公表レートを取得できます。</p>
                 </label>
                 <label class="field">
                   <span>シミュレーション終了</span>
@@ -310,12 +318,16 @@
             <div class="chart-grid">
               <div class="chart-card">
                 <h3>総資産・純資産</h3>
+                <p class="inline-note">総資産は負債を引く前の資産合計、純資産は総資産から借入やカード残高を引いた残りです。予測のみ表示しています。</p>
                 <div class="chart-stage" id="networth-chart"></div>
               </div>
               <div class="chart-card">
                 <h3>使える現金</h3>
                 <div class="chart-stage" id="cash-chart"></div>
               </div>
+            </div>
+            <div class="chart-detail-panel" id="chart-detail-panel" hidden>
+              <p class="inline-note">10万円以上の生活費等以外の収支がある月は点で表示します。近い月はまとめて候補表示し、点をクリックすると候補一覧と拡大表示を出します。</p>
             </div>
           </article>
 

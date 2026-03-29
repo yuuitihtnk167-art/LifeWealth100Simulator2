@@ -48,11 +48,14 @@ const SECTION_HEADERS = new Set([
 const state = loadState();
 let currentView = "dashboard";
 let lastFocusedControl = null;
+let pendingRenderFrame = 0;
 
 const dom = {
   birthDate: document.querySelector("#birth-date"),
   inflationRate: document.querySelector("#inflation-rate"),
   usdJpyRate: document.querySelector("#usd-jpy-rate"),
+  fetchUsdJpyRateButton: document.querySelector("#fetch-usd-jpy-rate"),
+  usdJpyRateStatus: document.querySelector("#usd-jpy-rate-status"),
   endAge: document.querySelector("#end-age"),
   assetListFile: document.querySelector("#asset-list-file"),
   assetTrendFile: document.querySelector("#asset-trend-file"),
@@ -87,6 +90,7 @@ const dom = {
   researchStrip: document.querySelector("#research-strip"),
   networthChart: document.querySelector("#networth-chart"),
   cashChart: document.querySelector("#cash-chart"),
+  chartDetailPanel: document.querySelector("#chart-detail-panel"),
   timelineTable: document.querySelector("#timeline-table"),
   navButtons: [...document.querySelectorAll(".nav-chip")],
   viewPanels: [...document.querySelectorAll(".view-panel")],
@@ -111,22 +115,22 @@ function bindEvents() {
   dom.backupButton.addEventListener("click", downloadBackup);
   dom.restoreFile.addEventListener("change", handleRestoreFile);
 
-  dom.birthDate.addEventListener("change", (event) => {
+  bindReactiveInput(dom.birthDate, (event) => {
     state.profile.birthDate = event.target.value;
-    saveAndRender();
   });
-  dom.inflationRate.addEventListener("change", (event) => {
+  bindReactiveInput(dom.inflationRate, (event) => {
     state.assumptions.inflationRate = toNumber(event.target.value);
-    saveAndRender();
   });
-  dom.usdJpyRate.addEventListener("change", (event) => {
+  bindReactiveInput(dom.usdJpyRate, (event) => {
     state.assumptions.usdJpyRate = toNumber(event.target.value);
-    saveAndRender();
+    state.assumptions.usdJpyRateSource = "manual";
+    state.assumptions.usdJpyRateReferenceDate = "";
+    state.assumptions.usdJpyRateFetchedAt = "";
   });
-  dom.endAge.addEventListener("change", (event) => {
+  bindReactiveInput(dom.endAge, (event) => {
     state.profile.endAge = Math.max(1, Math.round(toNumber(event.target.value)));
-    saveAndRender();
   });
+  dom.fetchUsdJpyRateButton.addEventListener("click", fetchLatestUsdJpyRate);
 
   document.querySelector("#add-bond-row").addEventListener("click", () => {
     state.manual.bondAssets.push(createBondRow());
@@ -154,6 +158,19 @@ function bindEvents() {
   });
 }
 
+function bindReactiveInput(element, applyValue) {
+  ["input", "change"].forEach((eventName) => {
+    element.addEventListener(eventName, (event) => {
+      applyValue(event);
+      if (eventName === "change") {
+        saveAndRender();
+      } else {
+        scheduleRender();
+      }
+    });
+  });
+}
+
 function createDefaultState() {
   const phaseValues = {};
   PHASES.forEach((phase, index) => {
@@ -175,6 +192,9 @@ function createDefaultState() {
     assumptions: {
       inflationRate: 2,
       usdJpyRate: 150,
+      usdJpyRateSource: "manual",
+      usdJpyRateReferenceDate: "",
+      usdJpyRateFetchedAt: "",
       conservativeInflation: 3,
       conservativeReturnShift: -2,
       fxStressPercent: 10,
@@ -203,7 +223,6 @@ function createDefaultState() {
       snapshot: null,
       timeline: [],
       summary: null,
-      actualTrendMonthly: [],
     },
   };
 }
@@ -340,6 +359,10 @@ function saveState() {
 }
 
 function saveAndRender(statusMessage = "") {
+  if (pendingRenderFrame) {
+    cancelAnimationFrame(pendingRenderFrame);
+    pendingRenderFrame = 0;
+  }
   const focusSnapshot = captureFocusSnapshot();
   computeProjection();
   saveState();
@@ -347,8 +370,12 @@ function saveAndRender(statusMessage = "") {
   restoreFocusSnapshot(focusSnapshot);
 }
 
-function saveDraft() {
-  saveState();
+function scheduleRender(statusMessage = "") {
+  if (pendingRenderFrame) return;
+  pendingRenderFrame = requestAnimationFrame(() => {
+    pendingRenderFrame = 0;
+    saveAndRender(statusMessage);
+  });
 }
 
 function trackFocusedControl(event) {
@@ -368,6 +395,15 @@ function restoreFocusSnapshot(snapshot) {
   const target = findFocusableElement(snapshot);
   if (!target) return;
   target.focus({ preventScroll: true });
+  if (
+    typeof snapshot.value === "string" &&
+    (
+      (target instanceof HTMLInputElement && ["text", "search", "tel", "url", "email", "password"].includes(target.type)) ||
+      target instanceof HTMLTextAreaElement
+    )
+  ) {
+    target.value = snapshot.value;
+  }
 
   if (
     typeof snapshot.selectionStart === "number" &&
@@ -395,6 +431,12 @@ function describeFocusableElement(element) {
   if (typeof element.selectionStart === "number" && typeof element.selectionEnd === "number") {
     descriptor.selectionStart = element.selectionStart;
     descriptor.selectionEnd = element.selectionEnd;
+  }
+  if (
+    (element instanceof HTMLInputElement && ["text", "search", "tel", "url", "email", "password"].includes(element.type)) ||
+    element instanceof HTMLTextAreaElement
+  ) {
+    descriptor.value = element.value;
   }
 
   if (!descriptor.id && !descriptor.name && !descriptor.dataset) return null;
@@ -443,7 +485,40 @@ function renderApp(statusMessage = "") {
   renderResearchSection();
   renderWarnings();
   renderImportStatus(statusMessage);
+  enhanceMoneyInputs();
   switchView(currentView, true);
+}
+
+function enhanceMoneyInputs() {
+  const selectors = [
+    "[data-phase-field]",
+    "#fund-monthly",
+    "#stock-monthly",
+    "#insurance-adjustment",
+    "#dollar-monthly",
+    "[data-bond-id][data-key=\"faceValue\"]",
+    "[data-insurance-id][data-key=\"premiumPerMonth\"]",
+    "[data-pension-id][data-key=\"currentValue\"]",
+    "[data-pension-id][data-key=\"contributionPerMonth\"]",
+    "[data-pension-id][data-key=\"splitAmount\"]",
+    "[data-pension-id][data-key=\"lumpSumAmount\"]",
+    "[data-loan-id][data-key=\"balance\"]",
+    "[data-loan-id][data-key=\"monthlyPayment\"]",
+    "[data-loan-id][data-key=\"bonusPayment\"]",
+    "[data-card-id][data-key=\"balance\"]",
+    "[data-card-id][data-key=\"monthlyPayment\"]",
+  ];
+  document.querySelectorAll(selectors.join(", ")).forEach((input) => {
+    if (!(input instanceof HTMLInputElement)) return;
+    input.type = "text";
+    input.inputMode = "decimal";
+    input.dataset.inputKind = "money";
+    input.autocomplete = "off";
+    input.spellcheck = false;
+    if (document.activeElement !== input) {
+      input.value = formatMoneyInputValue(input.value);
+    }
+  });
 }
 
 function renderTopForm() {
@@ -451,6 +526,62 @@ function renderTopForm() {
   dom.inflationRate.value = state.assumptions.inflationRate ?? 2;
   dom.usdJpyRate.value = state.assumptions.usdJpyRate ?? 150;
   dom.endAge.value = state.profile.endAge ?? 100;
+  renderUsdJpyRateStatus();
+}
+
+function renderUsdJpyRateStatus(overrideMessage = "") {
+  if (!dom.usdJpyRateStatus) return;
+  if (overrideMessage) {
+    dom.usdJpyRateStatus.textContent = overrideMessage;
+    return;
+  }
+
+  if (state.assumptions.usdJpyRateSource === "frankfurter" && state.assumptions.usdJpyRateFetchedAt) {
+    const referenceDate = state.assumptions.usdJpyRateReferenceDate
+      ? formatSimpleDate(state.assumptions.usdJpyRateReferenceDate)
+      : "不明";
+    dom.usdJpyRateStatus.textContent = `最新公表日: ${referenceDate} / 取得: ${formatDateTime(state.assumptions.usdJpyRateFetchedAt)} / 出典: Frankfurter`;
+    return;
+  }
+
+  dom.usdJpyRateStatus.textContent = "手入力値です。必要なら最新公表レートを取得できます。";
+}
+
+function setUsdJpyRateFetchPending(isPending) {
+  if (!dom.fetchUsdJpyRateButton) return;
+  dom.fetchUsdJpyRateButton.disabled = isPending;
+  dom.fetchUsdJpyRateButton.textContent = isPending ? "取得中..." : "最新レート取得";
+}
+
+async function fetchLatestUsdJpyRate() {
+  setUsdJpyRateFetchPending(true);
+  renderUsdJpyRateStatus("USD/JPY の最新公表レートを取得しています...");
+
+  try {
+    const response = await fetch("https://api.frankfurter.dev/v1/latest?base=USD&symbols=JPY", {
+      cache: "no-store",
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const data = await response.json();
+    const latestRate = toNumber(data?.rates?.JPY);
+    if (!(latestRate > 0)) {
+      throw new Error("USD/JPY レートが取得できませんでした。");
+    }
+
+    state.assumptions.usdJpyRate = latestRate;
+    state.assumptions.usdJpyRateSource = "frankfurter";
+    state.assumptions.usdJpyRateReferenceDate = String(data?.date ?? "");
+    state.assumptions.usdJpyRateFetchedAt = new Date().toISOString();
+    saveAndRender(`USD/JPY レートを ${formatDecimal(latestRate, 2)} 円/USD に更新しました。`);
+  } catch (error) {
+    console.error(error);
+    renderUsdJpyRateStatus(`取得に失敗しました。手入力値を使用してください。${error?.message ? ` (${error.message})` : ""}`);
+  } finally {
+    setUsdJpyRateFetchPending(false);
+  }
 }
 
 function renderImportStatus(statusMessage = "") {
@@ -463,6 +594,7 @@ function renderImportStatus(statusMessage = "") {
 function renderSummaryStrip() {
   const snapshot = state.computed.snapshot;
   const summary = state.computed.summary;
+  const futureAgeLabel = `${formatAge(state.profile.endAge || 100)}時点`;
   const cards = [
     {
       label: "使える現金",
@@ -485,6 +617,7 @@ function renderSummaryStrip() {
       note: summary?.firstShortageMonth ? `不足月 ${summary.firstShortageMonth}` : "不足なし",
     },
   ];
+  cards[cards.length - 1].label = `${futureAgeLabel}の純資産`;
 
   dom.summaryStrip.innerHTML = cards
     .map(
@@ -500,6 +633,9 @@ function renderSummaryStrip() {
 
   dom.heroNetWorth.textContent = summary ? formatCurrency(summary.currentNetWorth) : "--";
   dom.heroFutureWorth.textContent = summary ? formatCurrency(summary.futureNetWorth) : "--";
+  if (dom.heroFutureWorth?.previousElementSibling) {
+    dom.heroFutureWorth.previousElementSibling.textContent = futureAgeLabel;
+  }
   dom.heroShortage.textContent = summary?.firstShortageMonth || "なし";
 }
 
@@ -576,36 +712,50 @@ function renderPhaseStartsForm() {
     .join("");
 
   dom.phaseStartsForm.querySelectorAll("[data-phase-start]").forEach((input) => {
-    input.addEventListener("change", (event) => {
+    const handler = (event) => {
       const key = event.target.dataset.phaseStart;
       state.phaseValues[key].startAge = Math.max(0, Math.round(toNumber(event.target.value)));
-      saveAndRender();
-    });
+      if (event.type === "change") {
+        saveAndRender();
+      } else {
+        scheduleRender();
+      }
+    };
+    input.addEventListener("input", handler);
+    input.addEventListener("change", handler);
   });
 }
 
 function renderCashflowSections() {
   dom.cashflowPhaseSections.innerHTML = PHASES.map((phase, index) => {
     const values = state.phaseValues[phase.key];
+    const previousPhase = index > 0 ? PHASES[index - 1] : null;
     const totalIncome = sumValues(values.incomes);
     const totalExpenses = sumValues(values.expenses);
     const monthlyBalance = totalIncome - totalExpenses;
-    const incomes = INCOME_FIELDS.map(
-      (field) => `
-        <label class="field">
-          <span>${escapeHtml(field.label)}</span>
-          <input type="number" min="0" step="1000" value="${escapeHtml(String(values.incomes[field.key] ?? 0))}" data-phase-field="${phase.key}" data-kind="income" data-key="${field.key}">
-        </label>
-      `
+    const forecastSummary = getPhaseForecastSummary(phase.key, monthlyBalance);
+    const incomes = INCOME_FIELDS.map((field) =>
+      renderPhaseMoneyField({
+        label: field.label,
+        phaseKey: phase.key,
+        kind: "income",
+        fieldKey: field.key,
+        value: values.incomes[field.key] ?? 0,
+        previousPhaseLabel: previousPhase?.label ?? "",
+        previousValue: previousPhase ? state.phaseValues[previousPhase.key].incomes[field.key] ?? 0 : null,
+      })
     ).join("");
 
-    const expenses = EXPENSE_FIELDS.map(
-      (field) => `
-        <label class="field">
-          <span>${escapeHtml(field.label)}</span>
-          <input type="number" min="0" step="1000" value="${escapeHtml(String(values.expenses[field.key] ?? 0))}" data-phase-field="${phase.key}" data-kind="expense" data-key="${field.key}">
-        </label>
-      `
+    const expenses = EXPENSE_FIELDS.map((field) =>
+      renderPhaseMoneyField({
+        label: field.label,
+        phaseKey: phase.key,
+        kind: "expense",
+        fieldKey: field.key,
+        value: values.expenses[field.key] ?? 0,
+        previousPhaseLabel: previousPhase?.label ?? "",
+        previousValue: previousPhase ? state.phaseValues[previousPhase.key].expenses[field.key] ?? 0 : null,
+      })
     ).join("");
 
     return `
@@ -617,12 +767,12 @@ function renderCashflowSections() {
           </div>
           <span class="pill">月額入力</span>
         </div>
+        ${renderCashflowForecastSummary(forecastSummary)}
         <div class="form-grid form-grid-4">
           ${renderLabeledMetric("収入合計", formatCurrency(totalIncome))}
           ${renderLabeledMetric("支出合計", formatCurrency(totalExpenses))}
           ${renderLabeledMetric("月次収支", formatCurrency(monthlyBalance))}
         </div>
-        ${index < PHASES.length - 1 ? `<div class="action-row"><button type="button" class="ghost-button" data-copy-phase="${escapeHtml(phase.key)}">下のフェーズへコピー</button></div>` : ""}
         <h3>収入</h3>
         <div class="form-grid form-grid-4">${incomes}</div>
         <h3>支出</h3>
@@ -632,38 +782,81 @@ function renderCashflowSections() {
   }).join("");
 
   dom.cashflowPhaseSections.querySelectorAll("[data-phase-field]").forEach((input) => {
-    input.addEventListener("change", (event) => {
+    const handler = (event) => {
       const phaseKey = event.target.dataset.phaseField;
       const kind = event.target.dataset.kind;
       const key = event.target.dataset.key;
       const bucket = kind === "income" ? state.phaseValues[phaseKey].incomes : state.phaseValues[phaseKey].expenses;
-      bucket[key] = toNumber(event.target.value);
-      saveAndRender();
-    });
-  });
-
-  dom.cashflowPhaseSections.querySelectorAll("[data-copy-phase]").forEach((button) => {
-    button.addEventListener("click", () => {
-      copyPhaseToOthers(button.dataset.copyPhase);
-      saveAndRender();
-    });
+      bucket[key] = parseMoney(event.target.value);
+      if (event.type === "change") {
+        saveAndRender();
+      } else {
+        scheduleRender();
+      }
+    };
+    input.addEventListener("input", handler);
+    input.addEventListener("change", handler);
   });
 }
 
-function copyPhaseToOthers(phaseKey) {
-  const source = state.phaseValues[phaseKey];
-  const sourceIndex = PHASES.findIndex((phase) => phase.key === phaseKey);
-  PHASES.forEach((phase, index) => {
-    if (index <= sourceIndex) return;
-    state.phaseValues[phase.key].incomes = structuredClone(source.incomes);
-    state.phaseValues[phase.key].expenses = structuredClone(source.expenses);
-  });
+function renderPhaseMoneyField({ label, phaseKey, kind, fieldKey, value, previousPhaseLabel = "", previousValue = null }) {
+  const reference = previousPhaseLabel
+    ? `<span class="phase-field-reference">${escapeHtml(previousPhaseLabel)} ${escapeHtml(formatCurrency(previousValue ?? 0))}</span>`
+    : "";
+  return `
+    <label class="field phase-field">
+      <span>${escapeHtml(label)}</span>
+      <div class="phase-field-control">
+        ${renderMoneyInput(`data-phase-field="${escapeHtml(phaseKey)}" data-kind="${escapeHtml(kind)}" data-key="${escapeHtml(fieldKey)}"`, value)}
+        ${reference}
+      </div>
+    </label>
+  `;
+}
+
+function getPhaseForecastSummary(phaseKey, baseMonthlyBalance) {
+  const phase = PHASES.find((item) => item.key === phaseKey);
+  const timeline = state.computed.timeline;
+  if (!phase || !timeline.length) {
+    return { startMonthLabel: "", actualCashDelta: null, adjustmentDelta: null };
+  }
+
+  const firstIndex = timeline.findIndex((row) => row.phaseLabel === phase.label);
+  if (firstIndex === -1) {
+    return { startMonthLabel: "", actualCashDelta: null, adjustmentDelta: null };
+  }
+
+  const openingCash = firstIndex > 0 ? timeline[firstIndex - 1].effectiveCash : (state.computed.snapshot?.effectiveCash ?? 0);
+  const actualCashDelta = timeline[firstIndex].effectiveCash - openingCash;
+
+  return {
+    startMonthLabel: timeline[firstIndex].monthLabel,
+    actualCashDelta,
+    adjustmentDelta: actualCashDelta - baseMonthlyBalance,
+  };
+}
+
+function renderCashflowForecastSummary(summary) {
+  if (!summary.startMonthLabel) {
+    return `
+      <div class="inline-note">このフェーズに該当する予測月はありません。</div>
+    `;
+  }
+
+  return `
+    <div class="form-grid form-grid-2">
+      ${renderLabeledMetric("開始月の現金増減", summary.actualCashDelta === null ? "--" : formatCurrency(summary.actualCashDelta))}
+      ${renderLabeledMetric("基本収支との差分", summary.adjustmentDelta === null ? "--" : formatCurrency(summary.adjustmentDelta))}
+    </div>
+    <p class="inline-note">${escapeHtml(summary.startMonthLabel)} 時点の予測値です。積立、保険、年金、借入返済などを含めた現金増減を表示します。</p>
+  `;
 }
 
 function renderBondSection() {
   const snapshot = state.computed.snapshot;
-  const activeRows = state.manual.bondAssets.filter((row) => !row.isMatured);
-  const maturedRows = state.manual.bondAssets.filter((row) => row.isMatured);
+  const simulationStartDate = getSimulationStartDate();
+  const activeRows = state.manual.bondAssets.filter((row) => !isBondMaturedOnOrBefore(row, simulationStartDate));
+  const maturedRows = state.manual.bondAssets.filter((row) => isBondMaturedOnOrBefore(row, simulationStartDate));
   const averageRate = snapshot ? snapshot.averageBondRate : 0;
   const metrics = [
     { label: "債券扱い合計", value: snapshot ? snapshot.bondLikeAssets : 0 },
@@ -794,7 +987,10 @@ function handleBondInput(event) {
   const row = state.manual.bondAssets.find((item) => item.id === id);
   if (!row) return;
   row[key] = event.target.type === "checkbox" ? event.target.checked : event.target.value;
-  if (["faceValue", "currentPrice", "rate", "currentValue"].includes(key)) {
+  if (key === "faceValue" || key === "currentValue") {
+    row[key] = parseMoney(row[key]);
+  }
+  if (key === "currentPrice" || key === "rate") {
     row[key] = toNumber(row[key]);
   }
   if (row.faceValue > 0 && row.currentPrice > 0) {
@@ -803,7 +999,7 @@ function handleBondInput(event) {
   if (event.type === "change") {
     saveAndRender();
   } else {
-    saveDraft();
+    scheduleRender();
   }
 }
 
@@ -815,7 +1011,7 @@ function renderFundsSection() {
     ${renderNumericField("想定利回り（年）", "fund-return", state.manual.funds.expectedReturn, 0.1)}
     ${renderNumericField("積立終了年齢", "fund-end-age", state.manual.funds.endAge, 1)}
   `;
-  bindSimpleNumericInput("#fund-monthly", "manual.funds.monthlyContribution");
+  bindSimpleNumericInput("#fund-monthly", "manual.funds.monthlyContribution", parseMoney);
   bindSimpleNumericInput("#fund-return", "manual.funds.expectedReturn");
   bindSimpleNumericInput("#fund-end-age", "manual.funds.endAge");
 
@@ -831,7 +1027,7 @@ function renderStocksSection() {
     ${renderNumericField("想定利回り（年）", "stock-return", state.manual.stocks.expectedReturn, 0.1)}
     ${renderNumericField("積立終了年齢", "stock-end-age", state.manual.stocks.endAge, 1)}
   `;
-  bindSimpleNumericInput("#stock-monthly", "manual.stocks.monthlyContribution");
+  bindSimpleNumericInput("#stock-monthly", "manual.stocks.monthlyContribution", parseMoney);
   bindSimpleNumericInput("#stock-return", "manual.stocks.expectedReturn");
   bindSimpleNumericInput("#stock-end-age", "manual.stocks.endAge");
 
@@ -848,7 +1044,7 @@ function renderInsuranceSection() {
     <div class="field"><span>計算式</span><div class="pill">元保険残高 + 手動調整 + 積立 + 利回り</div></div>
     <div class="field"><span>補足</span><div class="pill">元保険残高はCSV合計、調整差分は手動調整額で反映</div></div>
   `;
-  bindSimpleNumericInput("#insurance-adjustment", "manual.insuranceSettings.manualAdjustment");
+  bindSimpleNumericInput("#insurance-adjustment", "manual.insuranceSettings.manualAdjustment", parseMoney);
   bindSimpleNumericInput("#insurance-return", "manual.insuranceSettings.expectedReturn");
 
   dom.insuranceTable.innerHTML = `
@@ -884,11 +1080,11 @@ function renderInsuranceSection() {
       if (!row) return;
       const key = event.target.dataset.key;
       row[key] = event.target.value;
-      if (key === "premiumPerMonth") row[key] = toNumber(row[key]);
+      if (key === "premiumPerMonth") row[key] = parseMoney(row[key]);
       if (event.type === "change") {
         saveAndRender();
       } else {
-        saveDraft();
+        scheduleRender();
       }
     };
     input.addEventListener("input", handler);
@@ -912,7 +1108,7 @@ function renderDollarSection() {
     ${renderNumericField("想定利回り（年）", "dollar-return", state.manual.dollarSavings.expectedReturn, 0.1)}
     ${renderNumericField("積立終了年齢", "dollar-end-age", state.manual.dollarSavings.endAge, 1)}
   `;
-  bindSimpleNumericInput("#dollar-monthly", "manual.dollarSavings.monthlyContribution");
+  bindSimpleNumericInput("#dollar-monthly", "manual.dollarSavings.monthlyContribution", parseMoney);
   bindSimpleNumericInput("#dollar-return", "manual.dollarSavings.expectedReturn");
   bindSimpleNumericInput("#dollar-end-age", "manual.dollarSavings.endAge");
 
@@ -970,13 +1166,16 @@ function renderPensionSection() {
       if (!row) return;
       const key = event.target.dataset.key;
       row[key] = event.target.value;
-      if (["currentValue", "startAge", "contributionPerMonth", "splitAmount", "lumpSumAmount"].includes(key)) {
+      if (["currentValue", "contributionPerMonth", "splitAmount", "lumpSumAmount"].includes(key)) {
+        row[key] = parseMoney(row[key]);
+      }
+      if (key === "startAge") {
         row[key] = toNumber(row[key]);
       }
       if (event.type === "change") {
         saveAndRender();
       } else {
-        saveDraft();
+        scheduleRender();
       }
     };
     input.addEventListener("input", handler);
@@ -1073,15 +1272,24 @@ function renderDebtSection() {
     </tbody>
   `;
 
-  bindTableInputs(dom.loanTable, "data-loan-id", state.manual.loans, ["balance", "annualRate", "monthlyPayment", "bonusPayment"]);
-  bindTableInputs(dom.cardTable, "data-card-id", state.manual.cards, ["balance", "monthlyPayment", "annualRate"]);
+  bindTableInputs(dom.loanTable, "data-loan-id", state.manual.loans, ["balance", "annualRate", "monthlyPayment", "bonusPayment"], ["balance", "monthlyPayment", "bonusPayment"]);
+  bindTableInputs(dom.cardTable, "data-card-id", state.manual.cards, ["balance", "monthlyPayment", "annualRate"], ["balance", "monthlyPayment"]);
   bindRemoveButtons(dom.loanTable, "[data-remove-loan]", "removeLoan");
   bindRemoveButtons(dom.cardTable, "[data-remove-card]", "removeCard");
 }
 
 function renderResearchSection() {
   const summary = state.computed.summary;
-  const actualTrend = state.computed.actualTrendMonthly;
+  const timelineRows = state.computed.timeline;
+  const ageTicks = timelineRows.reduce((ticks, row, index) => {
+    const lastTick = ticks[ticks.length - 1];
+    if (!lastTick || lastTick.label !== formatAge(row.age)) {
+      ticks.push({ xIndex: index, label: formatAge(row.age) });
+    }
+    return ticks;
+  }, []);
+  const cashSeriesValues = timelineRows.map((row, index) => ({ label: row.monthLabel, xLabel: formatAge(row.age), xIndex: index, value: row.effectiveCash }));
+  const cashAnnotations = buildCashChartAnnotations(timelineRows);
 
   dom.researchStrip.innerHTML = [
     { label: "取込日", value: state.imports.importedAt ? formatDateTime(state.imports.importedAt) : "未取込" },
@@ -1099,33 +1307,26 @@ function renderResearchSection() {
     )
     .join("");
 
-  renderLineChart(dom.networthChart, [
+  renderForecastChart(dom.networthChart, [
     {
-      name: "実績総資産",
-      color: "#8a5627",
-      values: actualTrend.map((row) => ({ label: row.monthLabel, value: row.total })),
-    },
-    {
-      name: "予測総資産",
+      name: "総資産",
       color: "#0f6a6f",
-      values: state.computed.timeline.map((row) => ({ label: row.monthLabel, value: row.totalAssets })),
+      values: timelineRows.map((row, index) => ({ label: row.monthLabel, xLabel: formatAge(row.age), xIndex: index, value: row.totalAssets })),
     },
     {
-      name: "予測純資産",
+      name: "純資産（総資産-負債）",
       color: "#c75c33",
-      values: state.computed.timeline.map((row) => ({ label: row.monthLabel, value: row.netWorth })),
+      values: timelineRows.map((row, index) => ({ label: row.monthLabel, xLabel: formatAge(row.age), xIndex: index, value: row.netWorth })),
     },
-  ]);
+  ], { xTicks: ageTicks });
 
-  renderLineChart(dom.cashChart, [
+  renderForecastChart(dom.cashChart, [
     {
       name: "使える現金",
       color: "#0f6a6f",
-      values: state.computed.timeline.map((row) => ({ label: row.monthLabel, value: row.effectiveCash })),
+      values: cashSeriesValues,
     },
-  ]);
-
-  const timelineRows = state.computed.timeline;
+  ], { xTicks: ageTicks, annotations: cashAnnotations, detailContainer: dom.chartDetailPanel, detailRenderer: renderCashAnnotationSelection, detailContext: { cashSeriesValues } });
   dom.timelineTable.innerHTML = `
     <thead>
       <tr>
@@ -1148,19 +1349,29 @@ function renderResearchSection() {
           ? timelineRows
               .map((row, index) => {
                 const isPhaseShift = index > 0 && timelineRows[index - 1].phaseLabel !== row.phaseLabel;
+                const previousRow = index > 0 ? timelineRows[index - 1] : null;
+                const effectiveCashClass = getBalanceTrendClass(row.effectiveCash, previousRow?.effectiveCash);
+                const dollarBalanceClass = getBalanceTrendClass(row.dollarBalance, previousRow?.dollarBalance);
+                const bondLikeAssetsClass = getBalanceTrendClass(row.bondLikeAssets, previousRow?.bondLikeAssets);
+                const fundsBalanceClass = getBalanceTrendClass(row.fundsBalance, previousRow?.fundsBalance);
+                const stocksBalanceClass = getBalanceTrendClass(row.stocksBalance, previousRow?.stocksBalance);
+                const insuranceBalanceClass = getBalanceTrendClass(row.insuranceBalance, previousRow?.insuranceBalance);
+                const pensionAssetBalanceClass = getBalanceTrendClass(row.pensionAssetBalance, previousRow?.pensionAssetBalance);
+                const debtBalanceClass = getBalanceTrendClass(row.debtBalance, previousRow?.debtBalance, { invert: true });
+                const netWorthClass = getBalanceTrendClass(row.netWorth, previousRow?.netWorth);
                 return `
                   <tr class="${isPhaseShift ? "timeline-phase-shift" : ""}">
                     <td>${escapeHtml(row.monthLabel)}</td>
                     <td>${escapeHtml(formatAge(row.age))}</td>
-                    <td>${formatCurrency(row.effectiveCash)}</td>
-                    <td>${formatCurrency(row.dollarBalance)}</td>
-                    <td>${formatCurrency(row.bondLikeAssets)}</td>
-                    <td>${formatCurrency(row.fundsBalance)}</td>
-                    <td>${formatCurrency(row.stocksBalance)}</td>
-                    <td>${formatCurrency(row.insuranceBalance)}</td>
-                    <td>${formatCurrency(row.pensionAssetBalance)}</td>
-                    <td>${formatCurrency(row.debtBalance)}</td>
-                    <td>${formatCurrency(row.netWorth)}</td>
+                    <td class="${effectiveCashClass}">${formatCurrency(row.effectiveCash)}</td>
+                    <td class="${dollarBalanceClass}">${formatCurrency(row.dollarBalance)}</td>
+                    <td class="${bondLikeAssetsClass}">${formatCurrency(row.bondLikeAssets)}</td>
+                    <td class="${fundsBalanceClass}">${formatCurrency(row.fundsBalance)}</td>
+                    <td class="${stocksBalanceClass}">${formatCurrency(row.stocksBalance)}</td>
+                    <td class="${insuranceBalanceClass}">${formatCurrency(row.insuranceBalance)}</td>
+                    <td class="${pensionAssetBalanceClass}">${formatCurrency(row.pensionAssetBalance)}</td>
+                    <td class="${debtBalanceClass}">${formatCurrency(row.debtBalance)}</td>
+                    <td class="${netWorthClass}">${formatCurrency(row.netWorth)}</td>
                   </tr>
                 `;
               })
@@ -1337,7 +1548,6 @@ function buildImportedBondRows(sections) {
 function computeProjection() {
   const snapshot = computeSnapshot();
   const warnings = buildWarnings(snapshot);
-  const actualTrendMonthly = normalizeActualTrend(state.imports.parsedAssetTrend);
   const timeline = buildForecastTimeline(snapshot);
   const summary = buildSummary(snapshot, timeline);
 
@@ -1346,7 +1556,6 @@ function computeProjection() {
     snapshot,
     timeline,
     summary,
-    actualTrendMonthly,
   };
 }
 
@@ -1387,10 +1596,8 @@ function buildWarnings(snapshot) {
   if (!state.profile.birthDate) warnings.push({ location: "基本情報", message: "誕生日が未入力です。" });
 
   state.manual.bondAssets.forEach((row) => {
-    row.isMatured = Boolean(row.maturityDate) && isSameMonthOrPast(row.maturityDate, getSimulationStartDate());
     if (!row.currency) warnings.push({ location: "債券", message: `${row.name || "債券"} の通貨が未入力です。` });
     if (!row.maturityDate && row.type === "bond") warnings.push({ location: "債券", message: `${row.name || "債券"} の償還日が未入力です。` });
-    if (row.rate === 0 && row.type === "bond") warnings.push({ location: "債券", message: `${row.name || "債券"} の利率が未入力または0%です。` });
   });
 
   state.manual.pensions.forEach((row) => {
@@ -1419,7 +1626,11 @@ function buildForecastTimeline(snapshot) {
   let effectiveCash = snapshot.effectiveCash;
   let fundsBalance = snapshot.fundsBalance;
   let stocksBalance = snapshot.stocksBalance;
-  let bondAssets = structuredClone(state.manual.bondAssets).map((row) => ({ ...row, projectedValue: getBondDisplayValue(row) }));
+  let bondAssets = structuredClone(state.manual.bondAssets).map((row) => ({
+    ...row,
+    isMatured: isBondMaturedOnOrBefore(row, start),
+    projectedValue: getBondDisplayValue(row),
+  }));
   let insurancePolicies = structuredClone(state.manual.insurancePolicies).map((row) => ({ ...row }));
   let insuranceRunningBalance = snapshot.insuranceBalance;
   let pensionPlans = structuredClone(state.manual.pensions).map((row) => ({ ...row }));
@@ -1438,26 +1649,31 @@ function buildForecastTimeline(snapshot) {
     const inflationFactor = (1 + monthlyInflationRate) ** monthsSinceStart;
     const monthlyIncome = sumValues(phaseValues.incomes);
     const monthlyExpenses = sumValues(phaseValues.expenses) * inflationFactor;
+    const cashEvents = [];
 
     effectiveCash += monthlyIncome;
 
     if (age < state.manual.funds.endAge) {
       effectiveCash -= state.manual.funds.monthlyContribution;
       fundsBalance += state.manual.funds.monthlyContribution;
+      cashEvents.push(createCashEvent("投信積立", -state.manual.funds.monthlyContribution));
     }
     if (age < state.manual.stocks.endAge) {
       effectiveCash -= state.manual.stocks.monthlyContribution;
       stocksBalance += state.manual.stocks.monthlyContribution;
+      cashEvents.push(createCashEvent("株式積立", -state.manual.stocks.monthlyContribution));
     }
     if (age < state.manual.dollarSavings.endAge) {
       effectiveCash -= state.manual.dollarSavings.monthlyContribution;
       dollarUnits += convertYenToUsd(state.manual.dollarSavings.monthlyContribution);
+      cashEvents.push(createCashEvent("ドル積立", -state.manual.dollarSavings.monthlyContribution));
     }
 
     insurancePolicies.forEach((policy) => {
       if (!policy.endMonth || monthLabel <= policy.endMonth.replace("-", "/")) {
         effectiveCash -= policy.premiumPerMonth;
         insuranceRunningBalance += policy.premiumPerMonth;
+        cashEvents.push(createCashEvent(`保険料: ${policy.name || "保険"}`, -policy.premiumPerMonth));
       }
     });
     insuranceRunningBalance *= 1 + annualToMonthlyRate(state.manual.insuranceSettings.expectedReturn);
@@ -1466,22 +1682,29 @@ function buildForecastTimeline(snapshot) {
       if (age < plan.startAge) {
         effectiveCash -= plan.contributionPerMonth;
         plan.currentValue += plan.contributionPerMonth;
+        cashEvents.push(createCashEvent(`年金拠出: ${plan.name || "年金"}`, -plan.contributionPerMonth));
       } else if (plan.payoutType === "split") {
-        effectiveCash += plan.splitAmount;
+        const splitPayout = Math.min(Math.max(0, toNumber(plan.splitAmount)), Math.max(0, toNumber(plan.currentValue)));
+        effectiveCash += splitPayout;
+        plan.currentValue = Math.max(0, toNumber(plan.currentValue) - splitPayout);
+        cashEvents.push(createCashEvent(`年金受取: ${plan.name || "年金"}`, splitPayout));
       } else if (plan.payoutType === "lump" && !oneTimePensionPaidIds.has(plan.id)) {
         const lumpSumAmount = getPensionLumpSumAmount(plan, true);
         effectiveCash += lumpSumAmount;
         plan.currentValue = Math.max(0, toNumber(plan.currentValue) - lumpSumAmount);
         oneTimePensionPaidIds.add(plan.id);
+        cashEvents.push(createCashEvent(`年金一括受取: ${plan.name || "年金"}`, lumpSumAmount));
       }
     });
 
     effectiveCash -= monthlyExpenses;
 
     bondAssets.forEach((row) => {
-      row.projectedValue *= 1 + annualToMonthlyRate(row.rate || 0);
       if (row.maturityDate && !row.isMatured && isSameMonthOrPast(row.maturityDate, cursor)) {
-        if (row.destination === "cash") effectiveCash += row.projectedValue;
+        if (row.destination === "cash") {
+          effectiveCash += row.projectedValue;
+          cashEvents.push(createCashEvent(`償還入金: ${row.name || "債券"}`, row.projectedValue));
+        }
         if (row.destination === "dollar") dollarUnits += convertYenToUsd(row.projectedValue);
         row.isMatured = true;
       }
@@ -1498,7 +1721,10 @@ function buildForecastTimeline(snapshot) {
       const interest = loan.balance * annualToMonthlyRate(loan.annualRate);
       let payment = loan.monthlyPayment;
       if (parseBonusMonths(loan.bonusMonths).includes(cursor.getMonth() + 1)) payment += loan.bonusPayment;
-      if (!loan.includedInExpenses) effectiveCash -= payment;
+      if (!loan.includedInExpenses) {
+        effectiveCash -= payment;
+        cashEvents.push(createCashEvent(`借入返済: ${loan.name || "ローン"}`, -payment));
+      }
       loan.balance = Math.max(0, loan.balance - Math.max(0, payment - interest));
     });
 
@@ -1506,13 +1732,20 @@ function buildForecastTimeline(snapshot) {
       if (card.balance <= 0) return;
       if (card.paymentType === "一括") {
         if (card.dueMonth && monthLabel === card.dueMonth.replace("-", "/")) {
-          if (!card.includedInExpenses) effectiveCash -= card.balance;
+          const lumpPayment = card.balance;
+          if (!card.includedInExpenses) {
+            effectiveCash -= lumpPayment;
+            cashEvents.push(createCashEvent(`カード返済: ${card.name || "カード"}`, -lumpPayment));
+          }
           card.balance = 0;
         }
         return;
       }
       const interest = card.balance * annualToMonthlyRate(card.annualRate);
-      if (!card.includedInExpenses) effectiveCash -= card.monthlyPayment;
+      if (!card.includedInExpenses) {
+        effectiveCash -= card.monthlyPayment;
+        cashEvents.push(createCashEvent(`カード返済: ${card.name || "カード"}`, -card.monthlyPayment));
+      }
       card.balance = Math.max(0, card.balance - Math.max(0, card.monthlyPayment - interest));
     });
 
@@ -1536,6 +1769,7 @@ function buildForecastTimeline(snapshot) {
       debtBalance,
       totalAssets,
       netWorth,
+      cashEvents,
     });
 
     monthsSinceStart += 1;
@@ -1555,12 +1789,12 @@ function buildSummary(snapshot, timeline) {
     currentDebt,
     currentNetWorth,
     futureNetWorth: futureRow?.netWorth ?? currentNetWorth,
-    firstShortageMonth: firstShortage?.monthLabel ?? "",
+    firstShortageMonth: firstShortage ? `${firstShortage.monthLabel} / ${formatAge(firstShortage.age)}` : "",
     monthlyImprovementNeeded: firstShortage ? Math.ceil(Math.abs(firstShortage.effectiveCash) / 12 / 1000) * 1000 : 0,
   };
 }
 
-function normalizeActualTrend(rows) {
+/* function normalizeActualTrend(rows) {
   if (!rows?.length) return [];
   const grouped = new Map();
   rows.forEach((row) => {
@@ -1579,6 +1813,7 @@ function normalizeActualTrend(rows) {
   return [...grouped.values()].sort((a, b) => a.date - b.date);
 }
 
+*/
 function getSimulationStartDate() {
   const trendRows = state.imports.parsedAssetTrend;
   if (trendRows?.length) {
@@ -1608,7 +1843,7 @@ function getPhaseForAge(age) {
   return PHASES[0];
 }
 
-function renderLineChart(container, seriesList) {
+/* function renderLineChart(container, seriesList) {
   const allPoints = seriesList.flatMap((series) => series.values);
   if (!allPoints.length) {
     container.innerHTML = `<div class="inline-note">表示できるデータがまだありません。</div>`;
@@ -1679,6 +1914,442 @@ function renderLineChart(container, seriesList) {
   `;
 }
 
+*/
+function renderForecastChart(container, seriesList, options = {}) {
+  const allPoints = seriesList.flatMap((series) => series.values);
+  if (!allPoints.length) {
+    container.innerHTML = `<div class="inline-note">陦ｨ遉ｺ縺ｧ縺阪ｋ繝・・繧ｿ縺後∪縺縺ゅｊ縺ｾ縺帙ｓ縲・/div>`;
+    if (options.detailContainer) {
+      renderChartDetailPlaceholder(options.detailContainer);
+    }
+    return;
+  }
+
+  const width = 780;
+  const height = 280;
+  const padding = { top: 18, right: 20, bottom: 36, left: 52 };
+  const values = allPoints.map((point) => point.value);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const span = max - min || 1;
+  const plotWidth = width - padding.left - padding.right;
+  const plotHeight = height - padding.top - padding.bottom;
+  const xMax = Math.max(
+    1,
+    ...allPoints.map((point, index) => (typeof point.xIndex === "number" ? point.xIndex : index)),
+    ...(options.xTicks ?? []).map((tick, index) => (typeof tick.xIndex === "number" ? tick.xIndex : index))
+  );
+
+  const getX = (point, index) => {
+    const xIndex = typeof point.xIndex === "number" ? point.xIndex : index;
+    return padding.left + (plotWidth * xIndex) / xMax;
+  };
+  const getY = (value) => padding.top + plotHeight - ((value - min) / span) * plotHeight;
+  const axisTicks = pickAxisTickPoints(options.xTicks?.length ? options.xTicks : buildDefaultAxisTicks(allPoints), 6);
+
+  const lines = seriesList
+    .map((series) => {
+      if (!series.values.length) return "";
+      const path = series.values
+        .map((point, index) => `${index === 0 ? "M" : "L"} ${getX(point, index).toFixed(2)} ${getY(point.value).toFixed(2)}`)
+        .join(" ");
+      return `<path d="${path}" fill="none" stroke="${series.color}" stroke-width="3" stroke-linecap="round"></path>`;
+    })
+    .join("");
+
+  const axisLabels = axisTicks
+    .map((tick, index) => {
+      const x = getX(tick, index);
+      return `<text x="${x}" y="${height - 10}" text-anchor="middle" font-size="12" fill="#576268">${escapeHtml(tick.label)}</text>`;
+    })
+    .join("");
+
+  const valueLabels = [max, min, (max + min) / 2]
+    .map((value) => {
+      const y = getY(value);
+      return `
+        <line x1="${padding.left}" x2="${width - padding.right}" y1="${y}" y2="${y}" stroke="rgba(98, 83, 63, 0.12)"></line>
+        <text x="${padding.left - 8}" y="${y + 4}" text-anchor="end" font-size="12" fill="#576268">${escapeHtml(formatCurrencyShort(value))}</text>
+      `;
+    })
+    .join("");
+
+  const legend = seriesList
+    .map(
+      (series, index) => `
+        <g transform="translate(${padding.left + index * 180}, ${padding.top - 2})">
+          <rect x="0" y="0" width="18" height="4" rx="2" fill="${series.color}"></rect>
+          <text x="26" y="6" font-size="12" fill="#1f2427">${escapeHtml(series.name)}</text>
+        </g>
+      `
+    )
+    .join("");
+
+  const annotationGroups = buildAnnotationGroups(options.annotations ?? [], (annotation, index) => ({
+    x: getX(annotation, index),
+    y: getY(annotation.value),
+  }));
+  const annotations = annotationGroups
+    .map((group, index) => createAnnotationGroupMarkup(group, index))
+    .join("");
+
+  container.innerHTML = `
+    <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="forecast chart">
+      <rect x="0" y="0" width="${width}" height="${height}" fill="transparent"></rect>
+      ${valueLabels}
+      ${lines}
+      ${annotations}
+      ${axisLabels}
+      ${legend}
+    </svg>
+  `;
+
+  const renderSelectedDetail = (selectedIndex) => {
+    if (!options.detailContainer) return;
+    const selectedGroup = selectedIndex >= 0 ? annotationGroups[selectedIndex] : null;
+    if (selectedGroup && typeof options.detailRenderer === "function") {
+      options.detailRenderer(options.detailContainer, selectedGroup, {
+        ...options.detailContext,
+        chartContainer: container,
+        annotationGroups,
+        annotations: options.annotations ?? [],
+        selectedIndex,
+      });
+      return;
+    }
+    renderChartDetailPlaceholder(options.detailContainer);
+  };
+
+  if (options.detailContainer) {
+    renderChartDetailPlaceholder(options.detailContainer);
+  }
+
+  container.querySelectorAll("[data-annotation-group-index]").forEach((node) => {
+    const showDetail = () => {
+      const groupIndex = Number(node.dataset.annotationGroupIndex);
+      const nextIndex = groupIndex;
+      updateSelectedAnnotationGroup(container, nextIndex);
+      renderSelectedDetail(nextIndex);
+    };
+
+    node.addEventListener("click", showDetail);
+    node.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      showDetail();
+    });
+  });
+}
+
+function buildAnnotationGroups(annotations, resolvePosition, thresholdPx = 14) {
+  if (!annotations.length) return [];
+
+  const positioned = annotations
+    .map((annotation, index) => ({
+      ...annotation,
+      plotX: resolvePosition(annotation, index).x,
+      plotY: resolvePosition(annotation, index).y,
+    }))
+    .sort((left, right) => left.plotX - right.plotX || left.plotY - right.plotY);
+
+  const groups = [];
+  positioned.forEach((annotation) => {
+    const matchingGroup = groups.find(
+      (group) => Math.abs(annotation.plotX - group.x) <= thresholdPx && Math.abs(annotation.plotY - group.y) <= thresholdPx
+    );
+    if (!matchingGroup) {
+      groups.push({
+        annotations: [annotation],
+        x: annotation.plotX,
+        y: annotation.plotY,
+      });
+      return;
+    }
+
+    matchingGroup.annotations.push(annotation);
+    matchingGroup.x = matchingGroup.annotations.reduce((sum, item) => sum + item.plotX, 0) / matchingGroup.annotations.length;
+    matchingGroup.y = matchingGroup.annotations.reduce((sum, item) => sum + item.plotY, 0) / matchingGroup.annotations.length;
+  });
+
+  return groups.map((group) => {
+    const orderedAnnotations = [...group.annotations].sort((left, right) => (left.xIndex ?? 0) - (right.xIndex ?? 0));
+    const total = orderedAnnotations.reduce((sum, annotation) => sum + toNumber(annotation.total), 0);
+    const startLabel = orderedAnnotations[0]?.label ?? "";
+    const endLabel = orderedAnnotations[orderedAnnotations.length - 1]?.label ?? startLabel;
+    return {
+      ...group,
+      annotations: orderedAnnotations,
+      total,
+      color: total >= 0 ? "#0f6a6f" : "#c75c33",
+      ariaLabel:
+        orderedAnnotations.length > 1
+          ? `${startLabel}から${endLabel}に近接する${orderedAnnotations.length}件の候補`
+          : orderedAnnotations[0]?.ariaLabel || orderedAnnotations[0]?.label || "chart point",
+    };
+  });
+}
+
+function createAnnotationGroupMarkup(group, index) {
+  const visibleRadius = group.annotations.length > 1 ? 6.5 : 4.5;
+  const hitRadius = group.annotations.length > 1 ? 16 : 13;
+  return `
+    <g
+      class="chart-annotation-group${group.annotations.length > 1 ? " is-cluster" : ""}"
+      tabindex="0"
+      role="button"
+      data-annotation-group-index="${index}"
+      aria-label="${escapeHtml(group.ariaLabel)}"
+    >
+      <circle class="chart-annotation-hit" cx="${group.x.toFixed(2)}" cy="${group.y.toFixed(2)}" r="${hitRadius}" fill="rgba(255,255,255,0.001)"></circle>
+      <circle class="chart-annotation-dot" cx="${group.x.toFixed(2)}" cy="${group.y.toFixed(2)}" r="${visibleRadius}" fill="${group.color}" stroke="#fff" stroke-width="1.5"></circle>
+      ${group.annotations.length > 1 ? `<text class="chart-annotation-count" x="${group.x.toFixed(2)}" y="${(group.y + 4).toFixed(2)}" text-anchor="middle">${group.annotations.length}</text>` : ""}
+    </g>
+  `;
+}
+
+function updateSelectedAnnotationGroup(container, selectedIndex) {
+  if (!container) return;
+  container.querySelectorAll("[data-annotation-group-index]").forEach((node) => {
+    node.classList.toggle("is-selected", Number(node.dataset.annotationGroupIndex) === selectedIndex);
+  });
+}
+
+function renderChartDetailPlaceholder(container) {
+  if (!container) return;
+  container.hidden = true;
+  container.innerHTML = "";
+  return; /*
+  if (!annotations.length) {
+    container.innerHTML = `<p class="inline-note">10万円以上の生活費等以外の収支はありません。</p>`;
+    return;
+  }
+
+  const hasCluster = annotations.some((annotation) => annotation.annotations?.length > 1);
+  container.innerHTML = hasCluster
+    ? `<p class="inline-note">10万円以上の生活費等以外の収支を点で表示しています。近い月はまとめて候補表示し、点をクリックすると候補一覧と拡大表示を出します。</p>`
+    : `<p class="inline-note">10万円以上の生活費等以外の収支がある月は点で表示しています。点をクリックすると明細を表示します。</p>`;
+*/
+}
+
+function buildDefaultAxisTicks(points) {
+  return points.map((point, index) => ({
+    xIndex: typeof point.xIndex === "number" ? point.xIndex : index,
+    label: point.xLabel || point.label,
+  }));
+}
+
+function pickAxisTickPoints(points, count) {
+  if (!points.length) return [];
+  if (points.length <= count) return points;
+  const maxIndex = points.length - 1;
+  const indexes = new Set([0, maxIndex]);
+  for (let step = 1; step < count - 1; step += 1) {
+    indexes.add(Math.round((maxIndex * step) / (count - 1)));
+  }
+  return [...indexes]
+    .sort((left, right) => left - right)
+    .map((index) => points[index]);
+}
+
+function buildCashChartAnnotations(timelineRows) {
+  return timelineRows
+    .map((row, index) => {
+      const notableEvents = (row.cashEvents ?? []).filter((event) => Math.abs(event.amount) >= 100000);
+      if (!notableEvents.length) return null;
+      const total = notableEvents.reduce((sum, event) => sum + event.amount, 0);
+      return {
+        xIndex: index,
+        value: row.effectiveCash,
+        color: total >= 0 ? "#0f6a6f" : "#c75c33",
+        label: row.monthLabel,
+        monthLabel: row.monthLabel,
+        age: row.age,
+        effectiveCash: row.effectiveCash,
+        total,
+        eventCount: notableEvents.length,
+        events: notableEvents,
+        ariaLabel: `${row.monthLabel} ${formatAge(row.age)} ${notableEvents.length}件の明細`,
+      };
+    })
+    .filter(Boolean);
+}
+
+function renderCashAnnotationSelection(container, group, context = {}) {
+  if (!group) {
+    renderChartDetailPlaceholder(container);
+    return;
+  }
+
+  container.hidden = false;
+  const annotations = [...group.annotations].sort((left, right) => (left.xIndex ?? 0) - (right.xIndex ?? 0));
+  const isClustered = annotations.length > 1;
+  const firstAnnotation = annotations[0];
+  const lastAnnotation = annotations[annotations.length - 1];
+  const heading = isClustered
+    ? `${firstAnnotation?.monthLabel ?? ""} - ${lastAnnotation?.monthLabel ?? ""}`
+    : `${firstAnnotation?.monthLabel ?? ""} / ${formatAge(firstAnnotation?.age ?? 0)}`;
+  const note = isClustered
+    ? "近い月が重なっているため、該当月をまとめて表示しています。"
+    : "選択した月の明細です。";
+
+  container.innerHTML = `
+    <section class="chart-detail-group">
+      <div class="chart-detail-header">
+        <div>
+          <h3>${escapeHtml(heading)}</h3>
+          <p class="inline-note">${escapeHtml(note)}</p>
+        </div>
+        <div class="chart-detail-actions">
+          ${isClustered ? `<span class="pill">${annotations.length}か月</span>` : ""}
+          <button type="button" class="ghost-button chart-detail-reset-button" data-close-cash-detail>拡大を消す</button>
+        </div>
+      </div>
+      <div class="chart-zoom-shell">
+        <div class="chart-zoom-stage">
+          ${renderCashClusterZoomChart(context.cashSeriesValues ?? [], annotations)}
+        </div>
+      </div>
+      <div class="chart-detail-entry-list">${renderCashAnnotationRows(annotations)}</div>
+    </section>
+  `;
+
+  container.querySelector("[data-close-cash-detail]")?.addEventListener("click", () => {
+    updateSelectedAnnotationGroup(context.chartContainer, -1);
+    renderChartDetailPlaceholder(container);
+  });
+}
+
+/* function renderCashAnnotationGroupCard(group, groupIndex, context = {}) {
+  const annotations = [...group.annotations].sort((left, right) => (left.xIndex ?? 0) - (right.xIndex ?? 0));
+  const isClustered = annotations.length > 1;
+  return `
+    <section class="chart-detail-group" data-cash-detail-group-index="${groupIndex}">
+      <div class="chart-detail-header">
+        <div>
+          <h3>${escapeHtml(isClustered ? "近接している候補月" : "生活費等以外の10万円以上の収支")}</h3>
+          <p class="inline-note">${escapeHtml(isClustered ? "近い月が重なっているため、以下の項目は同じ点にまとまっています。" : "項目をクリックすると元グラフの点を強調します。")}</p>
+        </div>
+        <div class="chart-detail-actions">
+          ${isClustered ? `<span class="pill">${annotations.length}件が近接</span>` : ""}
+          <button type="button" class="ghost-button chart-detail-reset-button" data-close-cash-detail>拡大を消す</button>
+        </div>
+      </div>
+      <div class="chart-zoom-shell">
+        <div class="chart-zoom-stage">
+          ${renderCashClusterZoomChart(context.cashSeriesValues ?? [], annotations)}
+        </div>
+      </div>
+      <div class="chart-detail-entry-list">${renderCashAnnotationRows(annotations, groupIndex)}</div>
+    </section>
+  `;
+}
+
+*/
+function renderCashAnnotationRows(annotations) {
+  return annotations
+    .map(
+      (annotation) => `
+        <article class="chart-detail-entry">
+          ${renderCashAnnotationFocus(annotation)}
+        </article>
+      `
+    )
+    .join("");
+}
+
+function renderCashAnnotationFocus(annotation, options = {}) {
+  const isCompact = options.compact === true;
+  const rows = annotation.events
+    .map(
+      (event) => `
+        <div class="chart-detail-row">
+          <span>${escapeHtml(event.label)}</span>
+          <strong class="${event.amount < 0 ? "is-negative" : "is-positive"}">${escapeHtml(formatSignedCurrency(event.amount))}</strong>
+        </div>
+      `
+    )
+    .join("");
+
+  if (isCompact) {
+    return `
+      <div class="chart-detail-list">${rows}</div>
+    `;
+  }
+
+  return `
+    <div class="chart-detail-summary">
+      <div>
+        <strong>${escapeHtml(`${annotation.monthLabel} / ${formatAge(annotation.age)}`)}</strong>
+      </div>
+      <strong class="chart-detail-amount ${annotation.total < 0 ? "is-negative" : "is-positive"}">${escapeHtml(formatSignedCurrency(annotation.total))}</strong>
+    </div>
+    <div class="chart-detail-list">${rows}</div>
+  `;
+}
+
+function renderCashClusterZoomChart(cashSeriesValues, annotations) {
+  if (!cashSeriesValues.length || !annotations.length) {
+    return `<p class="inline-note">拡大表示できるデータがありません。</p>`;
+  }
+
+  const focusIndexes = annotations.map((annotation) => annotation.xIndex ?? 0);
+  const windowStart = Math.max(0, Math.min(...focusIndexes) - 6);
+  const windowEnd = Math.min(cashSeriesValues.length - 1, Math.max(...focusIndexes) + 6);
+  const windowPoints = cashSeriesValues.filter((point) => point.xIndex >= windowStart && point.xIndex <= windowEnd);
+  if (!windowPoints.length) {
+    return `<p class="inline-note">拡大表示できるデータがありません。</p>`;
+  }
+
+  const width = 720;
+  const height = 176;
+  const padding = { top: 14, right: 18, bottom: 30, left: 42 };
+  const plotWidth = width - padding.left - padding.right;
+  const plotHeight = height - padding.top - padding.bottom;
+  const values = windowPoints.map((point) => point.value);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const span = max - min || 1;
+  const xSpan = Math.max(1, windowEnd - windowStart);
+  const getX = (xIndex) => padding.left + (plotWidth * (xIndex - windowStart)) / xSpan;
+  const getY = (value) => padding.top + plotHeight - ((value - min) / span) * plotHeight;
+
+  const path = windowPoints
+    .map((point, index) => `${index === 0 ? "M" : "L"} ${getX(point.xIndex).toFixed(2)} ${getY(point.value).toFixed(2)}`)
+    .join(" ");
+
+  const focusCircles = annotations
+    .map(
+      (annotation) => `
+        <circle class="chart-zoom-focus" cx="${getX(annotation.xIndex).toFixed(2)}" cy="${getY(annotation.value).toFixed(2)}" r="5.2" fill="${annotation.total >= 0 ? "#0f6a6f" : "#c75c33"}"></circle>
+      `
+    )
+    .join("");
+
+  const tickLabels = pickAxisTickPoints(
+    windowPoints.map((point) => ({
+      xIndex: point.xIndex,
+      label: point.label,
+    })),
+    3
+  )
+    .map((tick) => `<text x="${getX(tick.xIndex).toFixed(2)}" y="${height - 8}" text-anchor="middle">${escapeHtml(tick.label)}</text>`)
+    .join("");
+
+  return `
+    <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="cash detail zoom chart">
+      <rect x="0" y="0" width="${width}" height="${height}" fill="transparent"></rect>
+      <line x1="${padding.left}" x2="${width - padding.right}" y1="${getY(max).toFixed(2)}" y2="${getY(max).toFixed(2)}" stroke="rgba(98, 83, 63, 0.12)"></line>
+      <line x1="${padding.left}" x2="${width - padding.right}" y1="${getY((max + min) / 2).toFixed(2)}" y2="${getY((max + min) / 2).toFixed(2)}" stroke="rgba(98, 83, 63, 0.12)"></line>
+      <line x1="${padding.left}" x2="${width - padding.right}" y1="${getY(min).toFixed(2)}" y2="${getY(min).toFixed(2)}" stroke="rgba(98, 83, 63, 0.12)"></line>
+      <path d="${path}" fill="none" stroke="#0f6a6f" stroke-width="2.5" stroke-linecap="round"></path>
+      ${focusCircles}
+      <text x="${padding.left - 6}" y="${(getY(max) + 4).toFixed(2)}" text-anchor="end">${escapeHtml(formatCurrencyShort(max))}</text>
+      <text x="${padding.left - 6}" y="${(getY(min) + 4).toFixed(2)}" text-anchor="end">${escapeHtml(formatCurrencyShort(min))}</text>
+      ${tickLabels}
+    </svg>
+  `;
+}
+
 function renderImportedSimpleTable(rows, columns) {
   if (!rows.length) {
     return `
@@ -1703,6 +2374,10 @@ function renderImportedSimpleTable(rows, columns) {
   `;
 }
 
+function renderMoneyInput(attributes, value) {
+  return `<input ${attributes} type="text" inputmode="decimal" data-input-kind="money" autocomplete="off" spellcheck="false" value="${escapeHtml(formatMoneyInputValue(value))}">`;
+}
+
 function renderNumericField(label, id, value, step = 1) {
   return `
     <label class="field">
@@ -1721,22 +2396,22 @@ function renderLabeledMetric(label, value) {
   `;
 }
 
-function bindSimpleNumericInput(selector, path) {
+function bindSimpleNumericInput(selector, path, parser = toNumber) {
   const input = document.querySelector(selector);
   if (!input) return;
   const handler = (event) => {
-    setByPath(state, path, toNumber(event.target.value));
+    setByPath(state, path, parser(event.target.value));
     if (event.type === "change") {
       saveAndRender();
     } else {
-      saveDraft();
+      scheduleRender();
     }
   };
   input.addEventListener("input", handler);
   input.addEventListener("change", handler);
 }
 
-function bindTableInputs(container, idAttribute, sourceArray, numericKeys) {
+function bindTableInputs(container, idAttribute, sourceArray, numericKeys, moneyKeys = []) {
   container.querySelectorAll(`[${idAttribute}]`).forEach((input) => {
     const handler = (event) => {
       const id = event.target.getAttribute(idAttribute);
@@ -1744,11 +2419,11 @@ function bindTableInputs(container, idAttribute, sourceArray, numericKeys) {
       if (!row) return;
       const key = event.target.dataset.key;
       row[key] = event.target.type === "checkbox" ? event.target.checked : event.target.value;
-      if (numericKeys.includes(key)) row[key] = toNumber(row[key]);
+      if (numericKeys.includes(key)) row[key] = moneyKeys.includes(key) ? parseMoney(row[key]) : toNumber(row[key]);
       if (event.type === "change") {
         saveAndRender();
       } else {
-        saveDraft();
+        scheduleRender();
       }
     };
     input.addEventListener("input", handler);
@@ -2008,6 +2683,13 @@ function getPensionLumpSumAmount(plan, useProjectedCurrent = false) {
   return projectedBalance;
 }
 
+function createCashEvent(label, amount) {
+  return {
+    label,
+    amount: toNumber(amount),
+  };
+}
+
 function getDollarInitialBalance(sections) {
   const items = sections["預金・現金・暗号資産"]?.items ?? [];
   return items.reduce((sum, item) => {
@@ -2019,7 +2701,8 @@ function getDollarInitialBalance(sections) {
 }
 
 function calculateAverageBondRate() {
-  const active = state.manual.bondAssets.filter((row) => !row.isMatured);
+  const simulationStartDate = getSimulationStartDate();
+  const active = state.manual.bondAssets.filter((row) => !isBondMaturedOnOrBefore(row, simulationStartDate));
   const totalWeight = active.reduce((sum, row) => sum + getBondDisplayValue(row), 0);
   if (!totalWeight) return 0;
   return active.reduce((sum, row) => sum + getBondDisplayValue(row) * toNumber(row.rate), 0) / totalWeight;
@@ -2094,6 +2777,10 @@ function isSameMonthOrPast(dateText, targetDate) {
   return date.getFullYear() < targetDate.getFullYear() || (date.getFullYear() === targetDate.getFullYear() && date.getMonth() <= targetDate.getMonth());
 }
 
+function isBondMaturedOnOrBefore(row, targetDate = getSimulationStartDate()) {
+  return Boolean(row?.maturityDate) && isSameMonthOrPast(row.maturityDate, targetDate);
+}
+
 function parseBonusMonths(value) {
   return String(value)
     .split(",")
@@ -2101,7 +2788,7 @@ function parseBonusMonths(value) {
     .filter((item) => item >= 1 && item <= 12);
 }
 
-function pickAxisLabels(labels, count) {
+/* function pickAxisLabels(labels, count) {
   if (labels.length <= count) return labels;
   const step = Math.max(1, Math.floor(labels.length / (count - 1)));
   const sample = labels.filter((_, index) => index % step === 0);
@@ -2110,6 +2797,7 @@ function pickAxisLabels(labels, count) {
   return sample.slice(0, count);
 }
 
+*/
 function looksLikeMojibake(text) {
   return /鬆|蜀|繧|縺|�/.test(text.slice(0, 200));
 }
@@ -2120,6 +2808,24 @@ function generateId(prefix) {
 
 function formatCurrency(value) {
   return new Intl.NumberFormat("ja-JP", { style: "currency", currency: "JPY", maximumFractionDigits: 0 }).format(Math.round(toNumber(value)));
+}
+
+function formatMoneyInputValue(value) {
+  return new Intl.NumberFormat("ja-JP", { minimumFractionDigits: 0, maximumFractionDigits: 4 }).format(parseMoney(value));
+}
+
+function getBalanceTrendClass(currentValue, previousValue, options = {}) {
+  if (previousValue === null || previousValue === undefined) return "timeline-amount-flat";
+  const delta = toNumber(currentValue) - toNumber(previousValue);
+  if (!delta) return "timeline-amount-flat";
+  const isGain = options.invert ? delta < 0 : delta > 0;
+  return isGain ? "timeline-amount-gain" : "timeline-amount-loss";
+}
+
+function formatSignedCurrency(value) {
+  const amount = Math.round(toNumber(value));
+  if (!amount) return formatCurrency(0);
+  return `${amount > 0 ? "+" : "-"}${formatCurrency(Math.abs(amount))}`;
 }
 
 function formatCurrencyShort(value) {
@@ -2151,6 +2857,12 @@ function formatCompactDate(date) {
 function formatDateTime(iso) {
   const date = new Date(iso);
   return `${date.getFullYear()}/${String(date.getMonth() + 1).padStart(2, "0")}/${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+function formatSimpleDate(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value ?? "");
+  return `${date.getFullYear()}/${String(date.getMonth() + 1).padStart(2, "0")}/${String(date.getDate()).padStart(2, "0")}`;
 }
 
 function escapeHtml(value) {
