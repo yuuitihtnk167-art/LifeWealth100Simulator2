@@ -26,15 +26,15 @@
             口座整理の都合は切り離し、生活に使える現金と長期資産の変化を確認できます。
           </p>
         </div>
-        <div class="hero-stats">
-          <div class="hero-stat">
-            <span class="label">純資産</span>
-            <strong id="hero-net-worth">--</strong>
-          </div>
-          <div class="hero-stat">
-            <span class="label">100歳時点</span>
-            <strong id="hero-future-worth">--</strong>
-          </div>
+          <div class="hero-stats">
+            <div class="hero-stat">
+              <span class="label">現在の純資産</span>
+              <strong id="hero-net-worth">--</strong>
+            </div>
+            <div class="hero-stat">
+              <span class="label">100歳時点の純資産</span>
+              <strong id="hero-future-worth">--</strong>
+            </div>
           <div class="hero-stat">
             <span class="label">初回不足月</span>
             <strong id="hero-shortage">なし</strong>
@@ -99,16 +99,12 @@
                   <p class="inline-note compact-note" id="import-date-label">取込日: 未読込</p>
                 </div>
               </div>
-              <div class="form-grid form-grid-2">
-                <label class="field">
-                  <span>資産一覧CSV</span>
-                  <input id="asset-list-file" type="file" accept=".csv,text/csv">
-                </label>
-                <label class="field">
-                  <span>資産推移CSV</span>
-                  <input id="asset-trend-file" type="file" accept=".csv,text/csv">
-                </label>
-              </div>
+                <div class="form-grid">
+                  <label class="field">
+                    <span>インポートCSV</span>
+                    <input id="asset-import-file" type="file" accept=".csv,text/csv">
+                  </label>
+                </div>
               <div class="action-row">
                 <button type="button" class="primary-button" id="import-csv-button">CSVを読み込む</button>
                 <button type="button" class="ghost-button" id="seed-sample-button">入力例を流し込む</button>

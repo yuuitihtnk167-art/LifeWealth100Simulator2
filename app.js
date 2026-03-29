@@ -59,8 +59,7 @@ const dom = {
   fetchUsdJpyRateButton: document.querySelector("#fetch-usd-jpy-rate"),
   usdJpyRateStatus: document.querySelector("#usd-jpy-rate-status"),
   endAge: document.querySelector("#end-age"),
-  assetListFile: document.querySelector("#asset-list-file"),
-  assetTrendFile: document.querySelector("#asset-trend-file"),
+  assetImportFile: document.querySelector("#asset-import-file"),
   importButton: document.querySelector("#import-csv-button"),
   importStatus: document.querySelector("#import-status"),
   importDateLabel: document.querySelector("#import-date-label"),
@@ -597,13 +596,14 @@ function renderImportStatus(statusMessage = "") {
   }
   dom.importStatus.textContent =
     statusMessage ||
-    `資産一覧: ${state.imports.assetListRaw ? "読込済み" : "未読込"} / 資産推移: ${state.imports.assetTrendRaw ? "読込済み" : "未読込"}`;
+    `統合CSV: ${state.imports.assetListRaw ? "読込済み" : "未読込"}`;
 }
 
 function renderSummaryStrip() {
   const snapshot = state.computed.snapshot;
   const summary = state.computed.summary;
   const futureAgeLabel = `${formatAge(state.profile.endAge || 100)}時点`;
+  const futureNetWorthLabel = `${futureAgeLabel}の純資産`;
   if (dom.summaryStrip) {
     const cards = [
       {
@@ -627,7 +627,7 @@ function renderSummaryStrip() {
         note: summary?.firstShortageMonth ? `不足月 ${summary.firstShortageMonth}` : "不足なし",
       },
     ];
-    cards[cards.length - 1].label = `${futureAgeLabel}の純資産`;
+    cards[cards.length - 1].label = futureNetWorthLabel;
 
     dom.summaryStrip.innerHTML = cards
       .map(
@@ -645,7 +645,7 @@ function renderSummaryStrip() {
   dom.heroNetWorth.textContent = summary ? formatCurrency(summary.currentNetWorth) : "--";
   dom.heroFutureWorth.textContent = summary ? formatCurrency(summary.futureNetWorth) : "--";
   if (dom.heroFutureWorth?.previousElementSibling) {
-    dom.heroFutureWorth.previousElementSibling.textContent = futureAgeLabel;
+    dom.heroFutureWorth.previousElementSibling.textContent = futureNetWorthLabel;
   }
   dom.heroShortage.textContent = summary?.firstShortageMonth || "なし";
 }
@@ -1672,17 +1672,17 @@ function switchView(view, skipButtonState = false) {
 
 async function handleImportClick() {
   try {
-    const [assetListFile, assetTrendFile] = [dom.assetListFile.files?.[0], dom.assetTrendFile.files?.[0]];
-    if (!assetListFile || !assetTrendFile) {
-      renderImportStatus("2つのCSVを選択してください。");
+    const importFile = dom.assetImportFile.files?.[0];
+    if (!importFile) {
+      renderImportStatus("CSVを選択してください。");
       return;
     }
 
-    const [assetListRaw, assetTrendRaw] = await Promise.all([readCsvFile(assetListFile), readCsvFile(assetTrendFile)]);
-    state.imports.assetListRaw = assetListRaw;
-    state.imports.assetTrendRaw = assetTrendRaw;
-    state.imports.parsedAssetList = parseAssetListCsv(assetListRaw);
-    state.imports.parsedAssetTrend = parseAssetTrendCsv(assetTrendRaw);
+    const importRaw = await readCsvFile(importFile);
+    state.imports.assetListRaw = importRaw;
+    state.imports.assetTrendRaw = importRaw;
+    state.imports.parsedAssetList = parseAssetListCsv(importRaw);
+    state.imports.parsedAssetTrend = parseAssetTrendCsv(importRaw, importFile.name);
     state.imports.importedAt = new Date().toISOString();
     hydrateStateFromImports();
     saveAndRender("CSVを読み込みました。");
@@ -2706,8 +2706,18 @@ function parseAssetListCsv(text) {
   return { sections };
 }
 
-function parseAssetTrendCsv(text) {
+function parseAssetTrendCsv(text, sourceName = "") {
   const rows = parseCsvRows(text);
+  if (!rows.length) return [];
+  if (looksLikeCombinedImportCsv(rows)) {
+    const sourceDate = extractDateFromFileName(sourceName);
+    return rows.slice(0, 10).map((row) => ({
+      日付: sourceDate,
+      項目: row[0] ?? "",
+      金額: row[1] ?? "",
+      比率: row[2] ?? "",
+    }));
+  }
   if (rows.length < 2) return [];
   const [headerRow, ...bodyRows] = rows;
   return bodyRows.map((row) =>
@@ -2755,6 +2765,16 @@ function parseCsvRows(text) {
     if (row.some((value) => value !== "")) rows.push(row);
   }
   return rows;
+}
+
+function looksLikeCombinedImportCsv(rows) {
+  return String(rows[0]?.[0] ?? "").startsWith("資産総額");
+}
+
+function extractDateFromFileName(fileName) {
+  const match = String(fileName || "").match(/(20\d{2})(\d{2})(\d{2})/);
+  if (!match) return "";
+  return `${match[1]}/${match[2]}/${match[3]}`;
 }
 
 function seedSampleData() {
