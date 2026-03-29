@@ -1038,7 +1038,6 @@ function renderCashflowSections() {
       <article class="panel">
         <div class="panel-heading">
           <div>
-            <p class="eyebrow">Phase</p>
             <h2>${escapeHtml(phase.label)}</h2>
           </div>
           <span class="pill">月額入力</span>
