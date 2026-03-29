@@ -549,16 +549,7 @@ function renderUsdJpyRateStatus(overrideMessage = "") {
     dom.usdJpyRateStatus.textContent = overrideMessage;
     return;
   }
-
-  if (state.assumptions.usdJpyRateSource === "frankfurter" && state.assumptions.usdJpyRateFetchedAt) {
-    const referenceDate = state.assumptions.usdJpyRateReferenceDate
-      ? formatSimpleDate(state.assumptions.usdJpyRateReferenceDate)
-      : "不明";
-    dom.usdJpyRateStatus.textContent = `最新公表日: ${referenceDate} / 取得: ${formatDateTime(state.assumptions.usdJpyRateFetchedAt)} / 出典: Frankfurter`;
-    return;
-  }
-
-  dom.usdJpyRateStatus.textContent = "手入力値です。必要なら最新公表レートを取得できます。";
+  dom.usdJpyRateStatus.textContent = "";
 }
 
 function setUsdJpyRateFetchPending(isPending) {
