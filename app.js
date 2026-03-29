@@ -698,6 +698,7 @@ function renderCashSection() {
   const sections = state.imports.parsedAssetList?.sections ?? {};
   const cashSection = sections["預金・現金・暗号資産"];
   const pointsSection = sections["ポイント・マイル"];
+  const dollarManagedItems = getDollarManagedCashItems(sections);
   const excludedBondRows = state.manual.bondAssets.filter((row) => row.excludeFromCash);
   const excludedBondTotal = excludedBondRows.reduce((sum, row) => sum + getBondDisplayValue(row), 0);
   const rawCashValue = snapshot ? snapshot.importedCashTotal + snapshot.pointsAsCash : 0;
@@ -787,7 +788,7 @@ function renderCashSection() {
   dom.pointsImportTable.innerHTML = renderImportedSectionTable(pointsSection, {
     fallbackColumns: ["名称", "現在の価値"],
   });
-  dom.cashExcludedTable.innerHTML = renderCashExcludedTable(excludedBondRows, snapshot);
+  dom.cashExcludedTable.innerHTML = renderCashExcludedTable(excludedBondRows, dollarManagedItems, snapshot);
 }
 
 function renderImportedSectionTable(section, options = {}) {
@@ -832,12 +833,12 @@ function getCashItemHandlingLabel(item) {
   const name = String(item["種類・名称"] ?? "");
   const institution = String(item["保有金融機関"] ?? "");
   const matcher = `${name}${institution}`;
-  if (/ドル預り/i.test(matcher)) return "現金から除外し、ドル資産として別管理";
+  if (isDollarManagedCashItem(item)) return "現金から除外し、ドル資産として別管理";
   if (/ビットコイン|Mona|円仕組/i.test(matcher)) return "現金から除外";
   return "現金として計上";
 }
 
-function renderCashExcludedTable(rows, snapshot) {
+function renderCashExcludedTable(rows, dollarManagedItems, snapshot) {
   const detailRows = rows.map((row) => ({
     name: row.name || "除外資産",
     amount: getBondDisplayValue(row),
@@ -846,12 +847,22 @@ function renderCashExcludedTable(rows, snapshot) {
     handling: row.destination === "dollar" ? "ドル資産として別管理" : "現金から除外",
   }));
 
-  if (snapshot?.dollarBalance) {
+  if (dollarManagedItems.length) {
+    detailRows.push(
+      ...dollarManagedItems.map((item) => ({
+        name: item["種類・名称"] || "ドル資産",
+        amount: parseMoney(item["残高"]),
+        institution: item["保有金融機関"] || "-",
+        source: "現金カテゴリ",
+        handling: "ドル資産として別管理",
+      }))
+    );
+  } else if (snapshot?.dollarBalance) {
     detailRows.push({
       name: "ドル資産として別管理している残高",
       amount: snapshot.dollarBalance,
       institution: "-",
-      source: "ドル",
+      source: "現金カテゴリ",
       handling: "使える現金では別管理",
     });
   }
@@ -1024,12 +1035,12 @@ function renderCashflowSections() {
           </div>
           <span class="pill">月額入力</span>
         </div>
-        ${renderCashflowForecastSummary(forecastSummary)}
         <div class="form-grid form-grid-4">
           ${renderLabeledMetric("収入合計", formatCurrency(totalIncome))}
           ${renderLabeledMetric("支出合計", formatCurrency(totalExpenses))}
-          ${renderLabeledMetric("月次収支", formatCurrency(monthlyBalance))}
+          ${renderLabeledMetric("月次収支（基本）", formatCurrency(monthlyBalance))}
         </div>
+        ${renderCashflowForecastSummary(forecastSummary)}
         <h3>収入</h3>
         <div class="form-grid form-grid-4">${incomes}</div>
         <h3>支出</h3>
@@ -1101,11 +1112,12 @@ function renderCashflowForecastSummary(summary) {
   }
 
   return `
+    <div class="inline-note">月次収支（基本）に、積立・保険・年金・返済などを反映した開始月の結果です。</div>
     <div class="form-grid form-grid-2">
-      ${renderLabeledMetric("開始月の現金増減", summary.actualCashDelta === null ? "--" : formatCurrency(summary.actualCashDelta))}
-      ${renderLabeledMetric("基本収支との差分", summary.adjustmentDelta === null ? "--" : formatCurrency(summary.adjustmentDelta))}
+      ${renderLabeledMetric("実際の現金増減（開始月）", summary.actualCashDelta === null ? "--" : formatCurrency(summary.actualCashDelta))}
+      ${renderLabeledMetric("追加反映分（積立・保険・返済など）", summary.adjustmentDelta === null ? "--" : formatCurrency(summary.adjustmentDelta))}
     </div>
-    <p class="inline-note">${escapeHtml(summary.startMonthLabel)} 時点の予測値です。積立、保険、年金、借入返済などを含めた現金増減を表示します。</p>
+    <p class="inline-note">${escapeHtml(summary.startMonthLabel)} 時点の予測値です。</p>
   `;
 }
 
@@ -2827,14 +2839,19 @@ function createCashEvent(label, amount) {
   };
 }
 
-function getDollarInitialBalance(sections) {
+function isDollarManagedCashItem(item) {
+  const name = String(item["種類・名称"] ?? "");
+  const institution = String(item["保有金融機関"] ?? "");
+  return name.includes("米ドル普通") && institution.includes("住信SBIネット銀行");
+}
+
+function getDollarManagedCashItems(sections) {
   const items = sections["預金・現金・暗号資産"]?.items ?? [];
-  return items.reduce((sum, item) => {
-    if ((item["種類・名称"] ?? "").includes("米ドル普通") && (item["保有金融機関"] ?? "").includes("住信SBIネット銀行")) {
-      return sum + parseMoney(item["残高"]);
-    }
-    return sum;
-  }, 0);
+  return items.filter((item) => isDollarManagedCashItem(item));
+}
+
+function getDollarInitialBalance(sections) {
+  return getDollarManagedCashItems(sections).reduce((sum, item) => sum + parseMoney(item["残高"]), 0);
 }
 
 function calculateAverageBondRate() {
