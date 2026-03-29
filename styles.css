@@ -203,6 +203,17 @@ input, select, textarea, button { font: inherit; }
   align-items: center;
 }
 
+.phase-start-pair-card {
+  grid-column: span 2;
+}
+
+.phase-start-pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+  gap: 0.8rem;
+  align-items: end;
+}
+
 .phase-field-reference {
   display: inline-flex;
   align-items: center;
@@ -280,6 +291,59 @@ textarea { resize: vertical; min-height: 6.2rem; }
 .asset-card p { margin: 0; color: var(--muted); }
 .asset-card strong { font-size: 1.45rem; }
 .asset-card button { align-self: flex-start; }
+
+.cash-breakdown-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.cash-breakdown-card {
+  padding: 1rem 1.1rem;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.cash-breakdown-card h3 {
+  margin: 0 0 0.45rem;
+  font-size: 1rem;
+  font-family: var(--font-display);
+}
+
+.asset-detail-list,
+.asset-detail-sublist {
+  display: grid;
+  gap: 0.55rem;
+  margin: 0.8rem 0;
+}
+
+.asset-detail-row,
+.asset-detail-subrow,
+.asset-detail-total {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: center;
+  padding: 0.65rem 0.8rem;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.asset-detail-subrow {
+  padding: 0.55rem 0.8rem;
+  background: rgba(255, 255, 255, 0.58);
+}
+
+.asset-detail-total {
+  margin-top: 0.8rem;
+  background: rgba(15, 106, 111, 0.08);
+}
+
+.asset-detail-row strong.is-positive { color: var(--accent); }
+.asset-detail-row strong.is-negative { color: #c75c33; }
 
 .metric-row {
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -558,13 +622,17 @@ textarea { resize: vertical; min-height: 6.2rem; }
 @media (max-width: 1100px) {
   .hero-panel, .section-grid-dashboard, .chart-grid { grid-template-columns: 1fr; }
   .form-grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .phase-start-pair-card { grid-column: span 2; }
   .summary-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .cash-breakdown-grid { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 720px) {
   .app-shell { padding: 1rem 0.85rem 2rem; }
   .form-grid-2, .form-grid-4, .summary-strip { grid-template-columns: 1fr; }
   .field-inline { grid-template-columns: 1fr; }
+  .phase-start-pair-card { grid-column: auto; }
+  .phase-start-pair { grid-template-columns: 1fr; }
   .phase-field-control { grid-template-columns: 1fr; }
   .phase-field-reference { white-space: normal; }
   .chart-detail-header,

@@ -84,6 +84,11 @@ const dom = {
   insuranceTable: document.querySelector("#insurance-table"),
   dollarSettingsForm: document.querySelector("#dollar-settings-form"),
   dollarImportTable: document.querySelector("#dollar-import-table"),
+  cashMetrics: document.querySelector("#cash-metrics"),
+  cashBreakdownGrid: document.querySelector("#cash-breakdown-grid"),
+  cashImportTable: document.querySelector("#cash-import-table"),
+  pointsImportTable: document.querySelector("#points-import-table"),
+  cashExcludedTable: document.querySelector("#cash-excluded-table"),
   pensionTable: document.querySelector("#pension-table"),
   loanTable: document.querySelector("#loan-table"),
   cardTable: document.querySelector("#card-table"),
@@ -176,6 +181,7 @@ function createDefaultState() {
   PHASES.forEach((phase, index) => {
     phaseValues[phase.key] = {
       startAge: index === 0 ? 0 : [65, 68, 85][index - 1],
+      retirementBonus: 0,
       incomes: INCOME_FIELDS.reduce((acc, field) => ({ ...acc, [field.key]: 0 }), {}),
       expenses: EXPENSE_FIELDS.reduce((acc, field) => ({ ...acc, [field.key]: 0 }), {}),
     };
@@ -475,6 +481,7 @@ function renderApp(statusMessage = "") {
   renderAssetCards();
   renderPhaseStartsForm();
   renderCashflowSections();
+  renderCashSection();
   renderBondSection();
   renderFundsSection();
   renderStocksSection();
@@ -492,6 +499,7 @@ function renderApp(statusMessage = "") {
 function enhanceMoneyInputs() {
   const selectors = [
     "[data-phase-field]",
+    "[data-retirement-bonus]",
     "#fund-monthly",
     "#stock-monthly",
     "#insurance-adjustment",
@@ -662,6 +670,9 @@ function renderAssetCards() {
     { label: "負債", value: state.computed.summary?.currentDebt ?? 0, view: "debt", note: "純資産計算に使用" },
   ];
 
+  cards[0].view = "cash";
+  cards[1].view = "cash";
+
   dom.assetCardGrid.innerHTML = cards
     .map(
       (card) => `
@@ -678,6 +689,221 @@ function renderAssetCards() {
   dom.assetCardGrid.querySelectorAll("[data-open-view]").forEach((button) => {
     button.addEventListener("click", () => switchView(button.dataset.openView));
   });
+}
+
+function renderCashSection() {
+  if (!dom.cashMetrics || !dom.cashBreakdownGrid || !dom.cashImportTable || !dom.pointsImportTable || !dom.cashExcludedTable) return;
+
+  const snapshot = state.computed.snapshot;
+  const sections = state.imports.parsedAssetList?.sections ?? {};
+  const cashSection = sections["預金・現金・暗号資産"];
+  const pointsSection = sections["ポイント・マイル"];
+  const excludedBondRows = state.manual.bondAssets.filter((row) => row.excludeFromCash);
+  const excludedBondTotal = excludedBondRows.reduce((sum, row) => sum + getBondDisplayValue(row), 0);
+  const rawCashValue = snapshot ? snapshot.importedCashTotal + snapshot.pointsAsCash : 0;
+
+  dom.cashMetrics.innerHTML = `
+    <div class="metric-box">
+      <span class="label">現金</span>
+      <strong>${snapshot ? formatCurrency(rawCashValue) : "--"}</strong>
+    </div>
+    <div class="metric-box">
+      <span class="label">使える現金</span>
+      <strong>${snapshot ? formatCurrency(snapshot.effectiveCash) : "--"}</strong>
+    </div>
+    <div class="metric-box">
+      <span class="label">ポイント</span>
+      <strong>${snapshot ? formatCurrency(snapshot.pointsAsCash) : "--"}</strong>
+    </div>
+    <div class="metric-box">
+      <span class="label">現金から除外</span>
+      <strong>${snapshot ? formatCurrency(snapshot.cashExcludedTotal) : "--"}</strong>
+    </div>
+  `;
+
+  dom.cashBreakdownGrid.innerHTML = snapshot
+    ? `
+        <section class="cash-breakdown-card">
+          <h3>現金の内訳</h3>
+          <p class="inline-note">インポートされた現金カテゴリとポイントの合計です。</p>
+          <div class="asset-detail-list">
+            <div class="asset-detail-row">
+              <span>インポートされた現金カテゴリ</span>
+              <strong>${formatCurrency(snapshot.importedCashTotal)}</strong>
+            </div>
+            <div class="asset-detail-row">
+              <span>ポイント</span>
+              <strong>${formatCurrency(snapshot.pointsAsCash)}</strong>
+            </div>
+          </div>
+          <div class="asset-detail-total">
+            <span>現金</span>
+            <strong>${formatCurrency(rawCashValue)}</strong>
+          </div>
+        </section>
+        <section class="cash-breakdown-card">
+          <h3>使える現金の内訳</h3>
+          <p class="inline-note">現金カテゴリとポイントから、現金として使わない資産を差し引いた残高です。</p>
+          <div class="asset-detail-list">
+            <div class="asset-detail-row">
+              <span>インポートされた現金カテゴリ</span>
+              <strong>${formatCurrency(snapshot.importedCashTotal)}</strong>
+            </div>
+            <div class="asset-detail-row">
+              <span>ポイント</span>
+              <strong class="is-positive">${formatSignedCurrency(snapshot.pointsAsCash)}</strong>
+            </div>
+            <div class="asset-detail-row">
+              <span>現金から除外している資産</span>
+              <strong class="is-negative">${formatSignedCurrency(-snapshot.cashExcludedTotal)}</strong>
+            </div>
+          </div>
+          <div class="asset-detail-sublist">
+            <div class="asset-detail-subrow">
+              <span>内訳: 債券扱い資産など</span>
+              <strong>${formatCurrency(excludedBondTotal)}</strong>
+            </div>
+            <div class="asset-detail-subrow">
+              <span>内訳: ドル資産として別管理</span>
+              <strong>${formatCurrency(snapshot.dollarBalance)}</strong>
+            </div>
+          </div>
+          <div class="asset-detail-total">
+            <span>使える現金</span>
+            <strong>${formatCurrency(snapshot.effectiveCash)}</strong>
+          </div>
+        </section>
+      `
+    : `
+        <section class="cash-breakdown-card">
+          <p>CSV を読み込むと、現金と使える現金の内訳をここに表示します。</p>
+        </section>
+      `;
+
+  dom.cashImportTable.innerHTML = renderImportedSectionTable(cashSection, {
+    fallbackColumns: ["種類・名称", "残高", "保有金融機関"],
+    extraColumns: [{ label: "アプリ内での扱い", render: (item) => getCashItemHandlingLabel(item) }],
+  });
+  dom.pointsImportTable.innerHTML = renderImportedSectionTable(pointsSection, {
+    fallbackColumns: ["名称", "現在の価値"],
+  });
+  dom.cashExcludedTable.innerHTML = renderCashExcludedTable(excludedBondRows, snapshot);
+}
+
+function renderImportedSectionTable(section, options = {}) {
+  const rows = section?.items ?? [];
+  const inferredColumns = section?.headers?.length ? [...section.headers] : Object.keys(rows[0] ?? {});
+  const columns = inferredColumns.length ? inferredColumns : [...(options.fallbackColumns ?? [])];
+  const extraColumns = options.extraColumns ?? [];
+  const allColumns = [...columns, ...extraColumns.map((column) => column.label)];
+
+  if (!allColumns.length) {
+    return `
+      <thead><tr><th>項目</th></tr></thead>
+      <tbody><tr><td>表示できる明細がありません。</td></tr></tbody>
+    `;
+  }
+
+  if (!rows.length) {
+    return `
+      <thead><tr>${allColumns.map((column) => `<th>${escapeHtml(column)}</th>`).join("")}</tr></thead>
+      <tbody><tr><td colspan="${allColumns.length}">表示できる明細がありません。</td></tr></tbody>
+    `;
+  }
+
+  return `
+    <thead><tr>${allColumns.map((column) => `<th>${escapeHtml(column)}</th>`).join("")}</tr></thead>
+    <tbody>
+      ${rows
+        .map(
+          (row) => `
+            <tr>
+              ${columns.map((column) => `<td>${escapeHtml(row[column] ?? "")}</td>`).join("")}
+              ${extraColumns.map((column) => `<td>${escapeHtml(column.render(row))}</td>`).join("")}
+            </tr>
+          `
+        )
+        .join("")}
+    </tbody>
+  `;
+}
+
+function getCashItemHandlingLabel(item) {
+  const name = String(item["種類・名称"] ?? "");
+  const institution = String(item["保有金融機関"] ?? "");
+  const matcher = `${name}${institution}`;
+  if (/ドル預り/i.test(matcher)) return "現金から除外し、ドル資産として別管理";
+  if (/ビットコイン|Mona|円仕組/i.test(matcher)) return "現金から除外";
+  return "現金として計上";
+}
+
+function renderCashExcludedTable(rows, snapshot) {
+  const detailRows = rows.map((row) => ({
+    name: row.name || "除外資産",
+    amount: getBondDisplayValue(row),
+    institution: row.institution || "-",
+    source: getCashExcludedSourceLabel(row),
+    handling: row.destination === "dollar" ? "ドル資産として別管理" : "現金から除外",
+  }));
+
+  if (snapshot?.dollarBalance) {
+    detailRows.push({
+      name: "ドル資産として別管理している残高",
+      amount: snapshot.dollarBalance,
+      institution: "-",
+      source: "ドル",
+      handling: "使える現金では別管理",
+    });
+  }
+
+  if (!detailRows.length) {
+    return `
+      <thead>
+        <tr>
+          <th>資産名</th>
+          <th>金額</th>
+          <th>保有先</th>
+          <th>取込元</th>
+          <th>扱い</th>
+        </tr>
+      </thead>
+      <tbody><tr><td colspan="5">現金から除外している資産はありません。</td></tr></tbody>
+    `;
+  }
+
+  return `
+    <thead>
+      <tr>
+        <th>資産名</th>
+        <th>金額</th>
+        <th>保有先</th>
+        <th>取込元</th>
+        <th>扱い</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${detailRows
+        .map(
+          (row) => `
+            <tr>
+              <td>${escapeHtml(row.name)}</td>
+              <td>${escapeHtml(formatCurrency(row.amount))}</td>
+              <td>${escapeHtml(row.institution)}</td>
+              <td>${escapeHtml(row.source)}</td>
+              <td>${escapeHtml(row.handling)}</td>
+            </tr>
+          `
+        )
+        .join("")}
+    </tbody>
+  `;
+}
+
+function getCashExcludedSourceLabel(row) {
+  if (row.sourceCategory === "cash") return "現金カテゴリ";
+  if (row.sourceCategory === "bonds") return "債券";
+  if (row.sourceCategory === "other") return "その他の資産";
+  return "手入力";
 }
 
 function renderWarnings() {
@@ -701,11 +927,28 @@ function renderWarnings() {
 function renderPhaseStartsForm() {
   dom.phaseStartsForm.innerHTML = PHASES.slice(1)
     .map((phase) => {
-      const value = state.phaseValues[phase.key].startAge;
+      const values = state.phaseValues[phase.key];
+      if (phase.key === "retired") {
+        return `
+          <div class="phase-start-pair-card">
+            <div class="phase-start-pair">
+              <label class="field">
+                <span>${escapeHtml(phase.label)}開始年齢</span>
+                <input type="number" min="0" max="120" step="1" data-phase-start="${escapeHtml(phase.key)}" value="${escapeHtml(String(values.startAge))}">
+              </label>
+              <label class="field">
+                <span>退職金</span>
+                ${renderMoneyInput(`data-retirement-bonus="retired"`, values.retirementBonus ?? 0)}
+              </label>
+            </div>
+          </div>
+        `;
+      }
+
       return `
         <label class="field">
           <span>${escapeHtml(phase.label)}開始年齢</span>
-          <input type="number" min="0" max="120" step="1" data-phase-start="${escapeHtml(phase.key)}" value="${escapeHtml(String(value))}">
+          <input type="number" min="0" max="120" step="1" data-phase-start="${escapeHtml(phase.key)}" value="${escapeHtml(String(values.startAge))}">
         </label>
       `;
     })
@@ -715,6 +958,20 @@ function renderPhaseStartsForm() {
     const handler = (event) => {
       const key = event.target.dataset.phaseStart;
       state.phaseValues[key].startAge = Math.max(0, Math.round(toNumber(event.target.value)));
+      if (event.type === "change") {
+        saveAndRender();
+      } else {
+        scheduleRender();
+      }
+    };
+    input.addEventListener("input", handler);
+    input.addEventListener("change", handler);
+  });
+
+  dom.phaseStartsForm.querySelectorAll("[data-retirement-bonus]").forEach((input) => {
+    const handler = (event) => {
+      const key = event.target.dataset.retirementBonus;
+      state.phaseValues[key].retirementBonus = Math.max(0, parseMoney(event.target.value));
       if (event.type === "change") {
         saveAndRender();
       } else {
@@ -1639,6 +1896,7 @@ function buildForecastTimeline(snapshot) {
   let loans = structuredClone(state.manual.loans).map((row) => ({ ...row }));
   let cards = structuredClone(state.manual.cards).map((row) => ({ ...row }));
   let monthsSinceStart = 0;
+  let retirementBonusPaid = false;
   const oneTimePensionPaidIds = new Set();
 
   for (let cursor = new Date(start); cursor <= end; cursor = addMonths(cursor, 1)) {
@@ -1650,6 +1908,15 @@ function buildForecastTimeline(snapshot) {
     const monthlyIncome = sumValues(phaseValues.incomes);
     const monthlyExpenses = sumValues(phaseValues.expenses) * inflationFactor;
     const cashEvents = [];
+    const retirementBonus = Math.max(0, toNumber(state.phaseValues.retired.retirementBonus));
+
+    if (!retirementBonusPaid && age >= state.phaseValues.retired.startAge) {
+      if (retirementBonus > 0) {
+        effectiveCash += retirementBonus;
+        cashEvents.push(createCashEvent("退職金", retirementBonus));
+      }
+      retirementBonusPaid = true;
+    }
 
     effectiveCash += monthlyIncome;
 
@@ -1794,26 +2061,6 @@ function buildSummary(snapshot, timeline) {
   };
 }
 
-/* function normalizeActualTrend(rows) {
-  if (!rows?.length) return [];
-  const grouped = new Map();
-  rows.forEach((row) => {
-    const date = parseJapaneseDate(row["日付"]);
-    if (!date) return;
-    const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
-    const existing = grouped.get(key);
-    if (!existing || date > existing.date) {
-      grouped.set(key, {
-        monthLabel: `${date.getFullYear()}/${String(date.getMonth() + 1).padStart(2, "0")}`,
-        date,
-        total: toNumber(row["合計（円）"]),
-      });
-    }
-  });
-  return [...grouped.values()].sort((a, b) => a.date - b.date);
-}
-
-*/
 function getSimulationStartDate() {
   const trendRows = state.imports.parsedAssetTrend;
   if (trendRows?.length) {
@@ -1842,79 +2089,6 @@ function getPhaseForAge(age) {
   if (age >= state.phaseValues.retired.startAge) return PHASES[1];
   return PHASES[0];
 }
-
-/* function renderLineChart(container, seriesList) {
-  const allPoints = seriesList.flatMap((series) => series.values);
-  if (!allPoints.length) {
-    container.innerHTML = `<div class="inline-note">表示できるデータがまだありません。</div>`;
-    return;
-  }
-
-  const width = 780;
-  const height = 280;
-  const padding = { top: 18, right: 20, bottom: 36, left: 52 };
-  const values = allPoints.map((point) => point.value);
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const span = max - min || 1;
-  const plotWidth = width - padding.left - padding.right;
-  const plotHeight = height - padding.top - padding.bottom;
-  const sampleLabels = pickAxisLabels(allPoints.map((point) => point.label), 6);
-
-  const lines = seriesList
-    .map((series) => {
-      if (!series.values.length) return "";
-      const path = series.values
-        .map((point, index) => {
-          const x = padding.left + (plotWidth * index) / Math.max(1, series.values.length - 1);
-          const y = padding.top + plotHeight - ((point.value - min) / span) * plotHeight;
-          return `${index === 0 ? "M" : "L"} ${x.toFixed(2)} ${y.toFixed(2)}`;
-        })
-        .join(" ");
-      return `<path d="${path}" fill="none" stroke="${series.color}" stroke-width="3" stroke-linecap="round"></path>`;
-    })
-    .join("");
-
-  const axisLabels = sampleLabels
-    .map((label, index) => {
-      const x = padding.left + (plotWidth * index) / Math.max(1, sampleLabels.length - 1);
-      return `<text x="${x}" y="${height - 10}" text-anchor="middle" font-size="12" fill="#576268">${escapeHtml(label)}</text>`;
-    })
-    .join("");
-
-  const valueLabels = [max, min, (max + min) / 2]
-    .map((value) => {
-      const y = padding.top + plotHeight - ((value - min) / span) * plotHeight;
-      return `
-        <line x1="${padding.left}" x2="${width - padding.right}" y1="${y}" y2="${y}" stroke="rgba(98, 83, 63, 0.12)"></line>
-        <text x="${padding.left - 8}" y="${y + 4}" text-anchor="end" font-size="12" fill="#576268">${escapeHtml(formatCurrencyShort(value))}</text>
-      `;
-    })
-    .join("");
-
-  const legend = seriesList
-    .map(
-      (series, index) => `
-        <g transform="translate(${padding.left + index * 180}, ${padding.top - 2})">
-          <rect x="0" y="0" width="18" height="4" rx="2" fill="${series.color}"></rect>
-          <text x="26" y="6" font-size="12" fill="#1f2427">${escapeHtml(series.name)}</text>
-        </g>
-      `
-    )
-    .join("");
-
-  container.innerHTML = `
-    <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="資産推移グラフ">
-      <rect x="0" y="0" width="${width}" height="${height}" fill="transparent"></rect>
-      ${valueLabels}
-      ${lines}
-      ${axisLabels}
-      ${legend}
-    </svg>
-  `;
-}
-
-*/
 function renderForecastChart(container, seriesList, options = {}) {
   const allPoints = seriesList.flatMap((series) => series.values);
   if (!allPoints.length) {
@@ -2118,17 +2292,6 @@ function renderChartDetailPlaceholder(container) {
   if (!container) return;
   container.hidden = true;
   container.innerHTML = "";
-  return; /*
-  if (!annotations.length) {
-    container.innerHTML = `<p class="inline-note">10万円以上の生活費等以外の収支はありません。</p>`;
-    return;
-  }
-
-  const hasCluster = annotations.some((annotation) => annotation.annotations?.length > 1);
-  container.innerHTML = hasCluster
-    ? `<p class="inline-note">10万円以上の生活費等以外の収支を点で表示しています。近い月はまとめて候補表示し、点をクリックすると候補一覧と拡大表示を出します。</p>`
-    : `<p class="inline-note">10万円以上の生活費等以外の収支がある月は点で表示しています。点をクリックすると明細を表示します。</p>`;
-*/
 }
 
 function buildDefaultAxisTicks(points) {
@@ -2219,32 +2382,6 @@ function renderCashAnnotationSelection(container, group, context = {}) {
   });
 }
 
-/* function renderCashAnnotationGroupCard(group, groupIndex, context = {}) {
-  const annotations = [...group.annotations].sort((left, right) => (left.xIndex ?? 0) - (right.xIndex ?? 0));
-  const isClustered = annotations.length > 1;
-  return `
-    <section class="chart-detail-group" data-cash-detail-group-index="${groupIndex}">
-      <div class="chart-detail-header">
-        <div>
-          <h3>${escapeHtml(isClustered ? "近接している候補月" : "生活費等以外の10万円以上の収支")}</h3>
-          <p class="inline-note">${escapeHtml(isClustered ? "近い月が重なっているため、以下の項目は同じ点にまとまっています。" : "項目をクリックすると元グラフの点を強調します。")}</p>
-        </div>
-        <div class="chart-detail-actions">
-          ${isClustered ? `<span class="pill">${annotations.length}件が近接</span>` : ""}
-          <button type="button" class="ghost-button chart-detail-reset-button" data-close-cash-detail>拡大を消す</button>
-        </div>
-      </div>
-      <div class="chart-zoom-shell">
-        <div class="chart-zoom-stage">
-          ${renderCashClusterZoomChart(context.cashSeriesValues ?? [], annotations)}
-        </div>
-      </div>
-      <div class="chart-detail-entry-list">${renderCashAnnotationRows(annotations, groupIndex)}</div>
-    </section>
-  `;
-}
-
-*/
 function renderCashAnnotationRows(annotations) {
   return annotations
     .map(
@@ -2788,16 +2925,6 @@ function parseBonusMonths(value) {
     .filter((item) => item >= 1 && item <= 12);
 }
 
-/* function pickAxisLabels(labels, count) {
-  if (labels.length <= count) return labels;
-  const step = Math.max(1, Math.floor(labels.length / (count - 1)));
-  const sample = labels.filter((_, index) => index % step === 0);
-  const last = labels[labels.length - 1];
-  if (sample[sample.length - 1] !== last) sample.push(last);
-  return sample.slice(0, count);
-}
-
-*/
 function looksLikeMojibake(text) {
   return /鬆|蜀|繧|縺|�/.test(text.slice(0, 200));
 }

@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>LifeWealth100 Simulator</title>
+    <title>LifeWeclth100SimulatorⅡ</title>
     <meta
       name="description"
       content="マネーフォワードの資産CSVをもとに、100歳までの世帯資産を予測するローカル完結型Webアプリ"
@@ -20,8 +20,7 @@
     <div class="app-shell">
       <header class="hero-panel">
         <div class="hero-copy">
-          <p class="eyebrow">Household Forecast</p>
-          <h1>LifeWealth100 Simulator</h1>
+          <h1>LifeWeclth100SimulatorⅡ</h1>
           <p class="hero-text">
             マネーフォワードの資産データと手入力の前提条件から、100歳までの世帯資産を月次で予測します。
             口座整理の都合は切り離し、生活に使える現金と長期資産の変化を確認できます。
@@ -46,6 +45,7 @@
       <nav class="main-nav" aria-label="主な画面">
         <button type="button" class="nav-chip is-active" data-view="dashboard">ホーム</button>
         <button type="button" class="nav-chip" data-view="cashflow">収支</button>
+        <button type="button" class="nav-chip" data-view="cash">現金</button>
         <button type="button" class="nav-chip" data-view="bonds">債券</button>
         <button type="button" class="nav-chip" data-view="funds">投資信託・ETF</button>
         <button type="button" class="nav-chip" data-view="stocks">株式</button>
@@ -168,6 +168,57 @@
           <div id="cashflow-phase-sections" class="stack-grid"></div>
         </section>
 
+
+        <section class="view-panel" id="view-cash">
+          <article class="panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Cash Detail</p>
+                <h2>現金と使える現金の内訳</h2>
+              </div>
+            </div>
+            <div class="metric-row" id="cash-metrics"></div>
+            <div class="cash-breakdown-grid" id="cash-breakdown-grid"></div>
+          </article>
+
+          <article class="panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Imported Cash</p>
+                <h2>インポートされた現金カテゴリの詳細</h2>
+              </div>
+            </div>
+            <p class="inline-note">CSV の「預金・現金・暗号資産」をそのまま表示します。</p>
+            <div class="table-wrap">
+              <table class="data-table compact-table" id="cash-import-table"></table>
+            </div>
+          </article>
+
+          <article class="panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Points</p>
+                <h2>ポイントの詳細</h2>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table class="data-table compact-table" id="points-import-table"></table>
+            </div>
+          </article>
+
+          <article class="panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Excluded Assets</p>
+                <h2>使える現金から除外している資産の詳細</h2>
+              </div>
+            </div>
+            <p class="inline-note">現金から除外した債券扱い資産などと、ドル資産として別管理している分を表示します。</p>
+            <div class="table-wrap">
+              <table class="data-table compact-table" id="cash-excluded-table"></table>
+            </div>
+          </article>
+        </section>
         <section class="view-panel" id="view-bonds">
           <article class="panel">
             <div class="panel-heading">
