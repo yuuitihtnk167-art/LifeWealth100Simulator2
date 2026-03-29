@@ -644,9 +644,6 @@ function renderSummaryStrip() {
 
   dom.heroNetWorth.textContent = summary ? formatCurrency(summary.currentNetWorth) : "--";
   dom.heroFutureWorth.textContent = summary ? formatCurrency(summary.futureNetWorth) : "--";
-  if (dom.heroFutureWorth?.previousElementSibling) {
-    dom.heroFutureWorth.previousElementSibling.textContent = futureNetWorthLabel;
-  }
   dom.heroShortage.textContent = summary?.firstShortageMonth || "なし";
 }
 
