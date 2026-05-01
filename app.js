@@ -4,6 +4,7 @@ const APP_VERSION = "0.1.0";
 const PHASES = [
   { key: "active", label: "現役" },
   { key: "retired", label: "定年後" },
+  { key: "retiredPartTime", label: "定年後(アルバイト)" },
   { key: "pension", label: "年金生活" },
   { key: "late", label: "終末期" },
 ];
@@ -70,6 +71,7 @@ const dom = {
   dashboardWarningList: document.querySelector("#dashboard-warning-list"),
   researchWarningList: document.querySelector("#research-warning-list"),
   heroNetWorth: document.querySelector("#hero-net-worth"),
+  heroFutureWorthLabel: document.querySelector("#hero-future-worth-label"),
   heroFutureWorth: document.querySelector("#hero-future-worth"),
   heroShortage: document.querySelector("#hero-shortage"),
   phaseStartsForm: document.querySelector("#phase-starts-form"),
@@ -184,7 +186,7 @@ function createDefaultState() {
   const phaseValues = {};
   PHASES.forEach((phase, index) => {
     phaseValues[phase.key] = {
-      startAge: index === 0 ? 0 : [65, 68, 85][index - 1],
+      startAge: index === 0 ? 0 : [65, 67, 68, 85][index - 1],
       retirementBonus: 0,
       incomes: INCOME_FIELDS.reduce((acc, field) => ({ ...acc, [field.key]: 0 }), {}),
       expenses: EXPENSE_FIELDS.reduce((acc, field) => ({ ...acc, [field.key]: 0 }), {}),
@@ -601,6 +603,9 @@ function renderImportStatus(statusMessage = "") {
 function renderSummaryStrip() {
   const summary = state.computed.summary;
   dom.heroNetWorth.textContent = summary ? formatCurrency(summary.currentNetWorth) : "--";
+  if (dom.heroFutureWorthLabel) {
+    dom.heroFutureWorthLabel.textContent = `${state.profile.endAge ?? 100}歳時点の純資産`;
+  }
   dom.heroFutureWorth.textContent = summary ? formatCurrency(summary.futureNetWorth) : "--";
   dom.heroShortage.textContent = summary?.firstShortageMonth || "なし";
 }
@@ -897,6 +902,7 @@ function renderPhaseStartsForm() {
   dom.phaseStartsForm.innerHTML = PHASES.slice(1)
     .map((phase) => {
       const values = state.phaseValues[phase.key];
+      const retiredPartTimeValues = state.phaseValues.retiredPartTime;
       if (phase.key === "retired") {
         return `
           <div class="phase-start-pair-card">
@@ -909,10 +915,15 @@ function renderPhaseStartsForm() {
                 <span>退職金</span>
                 ${renderMoneyInput(`data-retirement-bonus="retired"`, values.retirementBonus ?? 0)}
               </label>
+              <label class="field">
+                <span>${escapeHtml(PHASES.find((item) => item.key === "retiredPartTime")?.label ?? "定年後(アルバイト)")}開始年齢</span>
+                <input type="number" min="0" max="120" step="1" data-phase-start="retiredPartTime" value="${escapeHtml(String(retiredPartTimeValues.startAge))}">
+              </label>
             </div>
           </div>
         `;
       }
+      if (phase.key === "retiredPartTime") return "";
 
       return `
         <label class="field">
@@ -2099,9 +2110,10 @@ function getAgeAtMonthEnd(birthDateText, targetDate) {
 }
 
 function getPhaseForAge(age) {
-  if (age >= state.phaseValues.late.startAge) return PHASES[3];
-  if (age >= state.phaseValues.pension.startAge) return PHASES[2];
-  if (age >= state.phaseValues.retired.startAge) return PHASES[1];
+  for (let index = PHASES.length - 1; index >= 0; index -= 1) {
+    const phase = PHASES[index];
+    if (age >= state.phaseValues[phase.key].startAge) return phase;
+  }
   return PHASES[0];
 }
 function renderForecastChart(container, seriesList, options = {}) {
@@ -2800,6 +2812,7 @@ function seedSampleData() {
     state.phaseValues[phase.key].expenses = structuredClone(state.phaseValues.active.expenses);
   });
   state.phaseValues.retired.incomes.salary = 180000;
+  state.phaseValues.retiredPartTime.incomes.salary = 100000;
   state.phaseValues.pension.incomes.salary = 0;
   state.phaseValues.pension.incomes.otherIncome = 220000;
   state.phaseValues.late.expenses.medical = 80000;

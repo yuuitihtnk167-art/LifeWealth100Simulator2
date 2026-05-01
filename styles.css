@@ -204,12 +204,12 @@ input, select, textarea, button { font: inherit; }
 }
 
 .phase-start-pair-card {
-  grid-column: span 2;
+  grid-column: span 3;
 }
 
 .phase-start-pair {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 1fr);
   gap: 0.8rem;
   align-items: end;
 }
