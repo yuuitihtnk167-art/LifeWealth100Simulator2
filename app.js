@@ -1091,9 +1091,9 @@ function renderCashflowForecastSummary(summary) {
 
 function renderBondSection() {
   const snapshot = state.computed.snapshot;
-  const simulationStartDate = getSimulationStartDate();
-  const activeRows = state.manual.bondAssets.filter((row) => !isBondMaturedOnOrBefore(row, simulationStartDate));
-  const maturedRows = state.manual.bondAssets.filter((row) => isBondMaturedOnOrBefore(row, simulationStartDate));
+  const bondMaturityReferenceDate = getBondMaturityReferenceDate();
+  const activeRows = state.manual.bondAssets.filter((row) => !isBondMaturedOnOrBefore(row, bondMaturityReferenceDate));
+  const maturedRows = state.manual.bondAssets.filter((row) => isBondMaturedOnOrBefore(row, bondMaturityReferenceDate));
   const averageRate = snapshot ? snapshot.averageBondRate : 0;
   const metrics = [
     { label: "債券扱い合計", value: snapshot ? snapshot.bondLikeAssets : 0 },
@@ -1113,6 +1113,48 @@ function renderBondSection() {
     )
     .join("");
 
+  const renderBondInputRow = (row) => `
+    <tr>
+      <td>${renderTextInput(`data-bond-id="${escapeHtml(row.id)}" data-key="name"`, row.name)}</td>
+      <td>${renderTextInput(`data-bond-id="${escapeHtml(row.id)}" data-key="institution"`, row.institution)}</td>
+      <td>
+        <select data-bond-id="${escapeHtml(row.id)}" data-key="type">
+          ${[
+            ["bond", "債券"],
+            ["foreign", "外貨"],
+            ["volatile", "金・暗号資産"],
+            ["locked", "その他長期資産"],
+          ]
+            .map(([value, label]) => `<option value="${value}" ${row.type === value ? "selected" : ""}>${label}</option>`)
+            .join("")}
+        </select>
+      </td>
+      <td><input type="checkbox" data-bond-id="${escapeHtml(row.id)}" data-key="excludeFromCash" ${row.excludeFromCash ? "checked" : ""}></td>
+      <td>
+        <select data-bond-id="${escapeHtml(row.id)}" data-key="currency">
+          ${["JPY", "USD", "OTHER"].map((code) => `<option value="${code}" ${row.currency === code ? "selected" : ""}>${code}</option>`).join("")}
+        </select>
+      </td>
+      <td><input type="number" step="0.0001" data-bond-id="${escapeHtml(row.id)}" data-key="faceValue" value="${escapeHtml(String(row.faceValue ?? 0))}"></td>
+      <td><input type="number" step="0.0001" data-bond-id="${escapeHtml(row.id)}" data-key="currentPrice" value="${escapeHtml(String(row.currentPrice ?? 0))}"></td>
+      <td class="mono">${formatCurrency(getBondDisplayValue(row))}</td>
+      <td><input type="date" data-bond-id="${escapeHtml(row.id)}" data-key="maturityDate" value="${escapeHtml(row.maturityDate || "")}"></td>
+      <td><input type="number" step="0.01" data-bond-id="${escapeHtml(row.id)}" data-key="rate" value="${escapeHtml(String(row.rate ?? 0))}"></td>
+      <td>
+        <select data-bond-id="${escapeHtml(row.id)}" data-key="destination">
+          ${[
+            ["cash", "現金"],
+            ["dollar", "ドル"],
+            ["keep", "残す"],
+          ]
+            .map(([value, label]) => `<option value="${value}" ${row.destination === value ? "selected" : ""}>${label}</option>`)
+            .join("")}
+        </select>
+      </td>
+      <td><button type="button" class="danger-cell-button" data-remove-bond="${escapeHtml(row.id)}">削除</button></td>
+    </tr>
+  `;
+
   dom.bondTable.innerHTML = `
     <thead>
       <tr>
@@ -1131,51 +1173,7 @@ function renderBondSection() {
       </tr>
     </thead>
     <tbody>
-      ${activeRows
-        .map(
-          (row) => `
-            <tr>
-              <td>${renderTextInput(`data-bond-id="${escapeHtml(row.id)}" data-key="name"`, row.name)}</td>
-              <td>${renderTextInput(`data-bond-id="${escapeHtml(row.id)}" data-key="institution"`, row.institution)}</td>
-              <td>
-                <select data-bond-id="${escapeHtml(row.id)}" data-key="type">
-                  ${[
-                    ["bond", "債券"],
-                    ["foreign", "外貨"],
-                    ["volatile", "金・暗号資産"],
-                    ["locked", "その他長期資産"],
-                  ]
-                    .map(([value, label]) => `<option value="${value}" ${row.type === value ? "selected" : ""}>${label}</option>`)
-                    .join("")}
-                </select>
-              </td>
-              <td><input type="checkbox" data-bond-id="${escapeHtml(row.id)}" data-key="excludeFromCash" ${row.excludeFromCash ? "checked" : ""}></td>
-              <td>
-                <select data-bond-id="${escapeHtml(row.id)}" data-key="currency">
-                  ${["JPY", "USD", "OTHER"].map((code) => `<option value="${code}" ${row.currency === code ? "selected" : ""}>${code}</option>`).join("")}
-                </select>
-              </td>
-              <td><input type="number" step="0.0001" data-bond-id="${escapeHtml(row.id)}" data-key="faceValue" value="${escapeHtml(String(row.faceValue ?? 0))}"></td>
-              <td><input type="number" step="0.0001" data-bond-id="${escapeHtml(row.id)}" data-key="currentPrice" value="${escapeHtml(String(row.currentPrice ?? 0))}"></td>
-              <td class="mono">${formatCurrency(getBondDisplayValue(row))}</td>
-              <td><input type="date" data-bond-id="${escapeHtml(row.id)}" data-key="maturityDate" value="${escapeHtml(row.maturityDate || "")}"></td>
-              <td><input type="number" step="0.01" data-bond-id="${escapeHtml(row.id)}" data-key="rate" value="${escapeHtml(String(row.rate ?? 0))}"></td>
-              <td>
-                <select data-bond-id="${escapeHtml(row.id)}" data-key="destination">
-                  ${[
-                    ["cash", "現金"],
-                    ["dollar", "ドル"],
-                    ["keep", "残す"],
-                  ]
-                    .map(([value, label]) => `<option value="${value}" ${row.destination === value ? "selected" : ""}>${label}</option>`)
-                    .join("")}
-                </select>
-              </td>
-              <td><button type="button" class="danger-cell-button" data-remove-bond="${escapeHtml(row.id)}">削除</button></td>
-            </tr>
-          `
-        )
-        .join("")}
+      ${activeRows.map(renderBondInputRow).join("")}
     </tbody>
   `;
 
@@ -1183,37 +1181,38 @@ function renderBondSection() {
     <thead>
       <tr>
         <th>名称</th>
+        <th>保有金融機関</th>
+        <th>区分</th>
+        <th>現金から除外</th>
+        <th>通貨</th>
+        <th>保有額面</th>
+        <th>現在値</th>
         <th>円評価額</th>
         <th>償還日</th>
+        <th>利率(年)</th>
+        <th>償還先</th>
+        <th>削除</th>
       </tr>
     </thead>
     <tbody>
       ${
         maturedRows.length
-          ? maturedRows
-              .map(
-                (row) => `
-                  <tr>
-                    <td>${escapeHtml(row.name)}</td>
-                    <td>${formatCurrency(getBondDisplayValue(row))}</td>
-                    <td>${escapeHtml(row.maturityDate || "")}</td>
-                  </tr>
-                `
-              )
-              .join("")
-          : `<tr><td colspan="3">まだありません。</td></tr>`
+          ? maturedRows.map(renderBondInputRow).join("")
+          : `<tr><td colspan="12">まだありません。</td></tr>`
       }
     </tbody>
   `;
 
-  dom.bondTable.querySelectorAll("[data-bond-id]").forEach((input) => {
-    input.addEventListener("input", handleBondInput);
-    input.addEventListener("change", handleBondInput);
-  });
-  dom.bondTable.querySelectorAll("[data-remove-bond]").forEach((button) => {
-    button.addEventListener("click", () => {
-      state.manual.bondAssets = state.manual.bondAssets.filter((row) => row.id !== button.dataset.removeBond);
-      saveAndRender();
+  [dom.bondTable, dom.bondMaturedTable].forEach((table) => {
+    table.querySelectorAll("[data-bond-id]").forEach((input) => {
+      input.addEventListener("input", handleBondInput);
+      input.addEventListener("change", handleBondInput);
+    });
+    table.querySelectorAll("[data-remove-bond]").forEach((button) => {
+      button.addEventListener("click", () => {
+        state.manual.bondAssets = state.manual.bondAssets.filter((row) => row.id !== button.dataset.removeBond);
+        saveAndRender();
+      });
     });
   });
 }
@@ -1901,6 +1900,7 @@ function buildForecastTimeline(snapshot) {
   if (!state.profile.birthDate) return [];
 
   const start = getSimulationStartDate();
+  const bondMaturityReferenceDate = getBondMaturityReferenceDate();
   const end = getSimulationEndDate(state.profile.birthDate, state.profile.endAge);
   const monthlyInflationRate = annualToMonthlyRate(state.assumptions.inflationRate);
   const marketRiseAdjustmentRate = toNumber(state.assumptions.marketRiseAdjustmentRate);
@@ -1911,7 +1911,7 @@ function buildForecastTimeline(snapshot) {
   let stocksBalance = snapshot.stocksBalance;
   let bondAssets = structuredClone(state.manual.bondAssets).map((row) => ({
     ...row,
-    isMatured: isBondMaturedOnOrBefore(row, start),
+    isMatured: isBondMaturedOnOrBefore(row, bondMaturityReferenceDate),
     projectedValue: getBondDisplayValue(row),
   }));
   let insurancePolicies = structuredClone(state.manual.insurancePolicies).map((row) => ({ ...row }));
@@ -2095,6 +2095,15 @@ function getSimulationStartDate() {
   }
   const now = new Date();
   return new Date(now.getFullYear(), now.getMonth(), 1);
+}
+
+function getBondMaturityReferenceDate() {
+  const trendRows = state.imports.parsedAssetTrend;
+  if (trendRows?.length) {
+    const date = parseDateText(trendRows[0]["日付"]);
+    if (date) return startOfDay(date);
+  }
+  return startOfDay(new Date());
 }
 
 function getSimulationEndDate(birthDateText, endAge) {
@@ -2935,8 +2944,8 @@ function getDollarInitialBalance(sections) {
 }
 
 function calculateAverageBondRate() {
-  const simulationStartDate = getSimulationStartDate();
-  const active = state.manual.bondAssets.filter((row) => !isBondMaturedOnOrBefore(row, simulationStartDate));
+  const bondMaturityReferenceDate = getBondMaturityReferenceDate();
+  const active = state.manual.bondAssets.filter((row) => !isBondMaturedOnOrBefore(row, bondMaturityReferenceDate));
   const totalWeight = active.reduce((sum, row) => sum + getBondDisplayValue(row), 0);
   if (!totalWeight) return 0;
   return active.reduce((sum, row) => sum + getBondDisplayValue(row) * toNumber(row.rate), 0) / totalWeight;
@@ -3005,14 +3014,28 @@ function addMonths(date, amount) {
   return new Date(date.getFullYear(), date.getMonth() + amount, 1);
 }
 
+function parseDateText(dateText) {
+  if (!dateText) return null;
+  if (String(dateText).includes("/")) return parseJapaneseDate(dateText);
+  const [year, month, day] = String(dateText).split("-").map(Number);
+  if (!year || !month || !day) return null;
+  return new Date(year, month - 1, day);
+}
+
+function startOfDay(date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
 function isSameMonthOrPast(dateText, targetDate) {
-  const date = dateText.includes("/") ? parseJapaneseDate(dateText) : new Date(dateText);
+  const date = parseDateText(dateText);
   if (!date || Number.isNaN(date.getTime())) return false;
   return date.getFullYear() < targetDate.getFullYear() || (date.getFullYear() === targetDate.getFullYear() && date.getMonth() <= targetDate.getMonth());
 }
 
 function isBondMaturedOnOrBefore(row, targetDate = getSimulationStartDate()) {
-  return Boolean(row?.maturityDate) && isSameMonthOrPast(row.maturityDate, targetDate);
+  const maturityDate = parseDateText(row?.maturityDate);
+  if (!maturityDate || Number.isNaN(maturityDate.getTime())) return false;
+  return startOfDay(maturityDate).getTime() <= startOfDay(targetDate).getTime();
 }
 
 function parseBonusMonths(value) {
