@@ -27,8 +27,8 @@
         },
         "background": {
           "activeOnStart": true,
-          "beginsPattern": ".",
-          "endsPattern": "Serving HTTP on"
+          "beginsPattern": "^Serving HTTP on",
+          "endsPattern": "^Serving HTTP on"
         }
       }
     }
