@@ -48,7 +48,7 @@ const SECTION_HEADERS = new Set([
 
 const state = loadState();
 hydrateStateFromImports();
-let currentView = "dashboard";
+let currentView = getInitialView();
 let lastFocusedControl = null;
 let pendingRenderFrame = 0;
 
@@ -104,15 +104,27 @@ const dom = {
   viewPanels: [...document.querySelectorAll(".view-panel")],
 };
 
+function getInitialView() {
+  const requestedView = new URLSearchParams(window.location.search).get("view");
+  return document.querySelector(`#view-${escapeSelectorValue(requestedView)}`) ? requestedView : "dashboard";
+}
+
 bindEvents();
 computeProjection();
 renderApp();
+registerServiceWorker();
 
 function bindEvents() {
   document.addEventListener("focusin", trackFocusedControl, true);
 
   dom.navButtons.forEach((button) => {
-    button.addEventListener("click", () => switchView(button.dataset.view));
+    button.addEventListener("click", () => {
+      if (button.dataset.view === "research") {
+        openResearchWindow();
+        return;
+      }
+      switchView(button.dataset.view);
+    });
   });
 
   dom.importButton.addEventListener("click", handleImportClick);
@@ -1057,7 +1069,7 @@ function getPhaseForecastSummary(phaseKey, baseMonthlyBalance) {
     return { startMonthLabel: "", actualCashDelta: null, adjustmentDelta: null };
   }
 
-  const firstIndex = timeline.findIndex((row) => row.phaseLabel === phase.label);
+  const firstIndex = timeline.findIndex((row) => row.phaseLabel === phase.label && !row.isCurrentBalance);
   if (firstIndex === -1) {
     return { startMonthLabel: "", actualCashDelta: null, adjustmentDelta: null };
   }
@@ -1522,6 +1534,45 @@ function renderDebtSection() {
   bindRemoveButtons(dom.cardTable, "[data-remove-card]", "removeCard");
 }
 
+function registerServiceWorker() {
+  if (!("serviceWorker" in navigator)) return;
+  if (!["http:", "https:"].includes(window.location.protocol)) return;
+
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("./sw.js").catch((error) => {
+      console.warn("Service worker registration failed.", error);
+    });
+  });
+}
+
+const TIMELINE_DETAIL_METRICS = {
+  effectiveCash: "現金",
+  dollarBalance: "ドル",
+  bondLikeAssets: "債券",
+  fundsBalance: "投信・ETF",
+  stocksBalance: "株式",
+  insuranceBalance: "保険",
+  pensionAssetBalance: "年金",
+  debtBalance: "負債",
+  netWorth: "純資産",
+};
+
+function renderTimelineAmountCell(rowIndex, metricKey, value, trendClass) {
+  return `
+    <td class="${escapeHtml(trendClass)}">
+      <button
+        type="button"
+        class="timeline-amount-button"
+        data-timeline-detail
+        data-row-index="${escapeHtml(String(rowIndex))}"
+        data-metric-key="${escapeHtml(metricKey)}"
+      >
+        ${formatCurrency(value)}
+      </button>
+    </td>
+  `;
+}
+
 function renderResearchSection() {
   const summary = state.computed.summary;
   const timelineRows = state.computed.timeline;
@@ -1606,15 +1657,15 @@ function renderResearchSection() {
                   <tr class="${isPhaseShift ? "timeline-phase-shift" : ""}">
                     <td>${escapeHtml(row.monthLabel)}</td>
                     <td>${escapeHtml(formatAge(row.age))}</td>
-                    <td class="${effectiveCashClass}">${formatCurrency(row.effectiveCash)}</td>
-                    <td class="${dollarBalanceClass}">${formatCurrency(row.dollarBalance)}</td>
-                    <td class="${bondLikeAssetsClass}">${formatCurrency(row.bondLikeAssets)}</td>
-                    <td class="${fundsBalanceClass}">${formatCurrency(row.fundsBalance)}</td>
-                    <td class="${stocksBalanceClass}">${formatCurrency(row.stocksBalance)}</td>
-                    <td class="${insuranceBalanceClass}">${formatCurrency(row.insuranceBalance)}</td>
-                    <td class="${pensionAssetBalanceClass}">${formatCurrency(row.pensionAssetBalance)}</td>
-                    <td class="${debtBalanceClass}">${formatCurrency(row.debtBalance)}</td>
-                    <td class="${netWorthClass}">${formatCurrency(row.netWorth)}</td>
+                    ${renderTimelineAmountCell(index, "effectiveCash", row.effectiveCash, effectiveCashClass)}
+                    ${renderTimelineAmountCell(index, "dollarBalance", row.dollarBalance, dollarBalanceClass)}
+                    ${renderTimelineAmountCell(index, "bondLikeAssets", row.bondLikeAssets, bondLikeAssetsClass)}
+                    ${renderTimelineAmountCell(index, "fundsBalance", row.fundsBalance, fundsBalanceClass)}
+                    ${renderTimelineAmountCell(index, "stocksBalance", row.stocksBalance, stocksBalanceClass)}
+                    ${renderTimelineAmountCell(index, "insuranceBalance", row.insuranceBalance, insuranceBalanceClass)}
+                    ${renderTimelineAmountCell(index, "pensionAssetBalance", row.pensionAssetBalance, pensionAssetBalanceClass)}
+                    ${renderTimelineAmountCell(index, "debtBalance", row.debtBalance, debtBalanceClass)}
+                    ${renderTimelineAmountCell(index, "netWorth", row.netWorth, netWorthClass)}
                   </tr>
                 `;
               })
@@ -1623,6 +1674,193 @@ function renderResearchSection() {
       }
     </tbody>
   `;
+
+  dom.timelineTable.querySelectorAll("[data-timeline-detail]").forEach((button) => {
+    button.addEventListener("click", () => {
+      openTimelineDetailWindow(toNumber(button.dataset.rowIndex), button.dataset.metricKey);
+    });
+  });
+}
+
+function openTimelineDetailWindow(rowIndex, metricKey) {
+  const timelineRows = state.computed.timeline ?? [];
+  const row = timelineRows[rowIndex];
+  if (!row || !TIMELINE_DETAIL_METRICS[metricKey]) return;
+
+  const previousRow = rowIndex > 0 ? timelineRows[rowIndex - 1] : null;
+  const html = buildTimelineDetailWindowHtml(row, previousRow, metricKey);
+  const detailWindow = window.open("", "lifewealthTimelineDetail", "width=640,height=760,resizable=yes,scrollbars=yes");
+  if (!detailWindow) {
+    alert("詳細ウィンドウを開けませんでした。ブラウザのポップアップ設定を確認してください。");
+    return;
+  }
+
+  detailWindow.document.open();
+  detailWindow.document.write(html);
+  detailWindow.document.close();
+  detailWindow.focus();
+}
+
+function buildTimelineDetailWindowHtml(row, previousRow, metricKey) {
+  const metricLabel = TIMELINE_DETAIL_METRICS[metricKey];
+  const currentValue = toNumber(row[metricKey]);
+  const previousValue = previousRow ? toNumber(previousRow[metricKey]) : currentValue;
+  const delta = currentValue - previousValue;
+  const title = `${row.monthLabel} ${metricLabel} 詳細`;
+  const events = row.isCurrentBalance ? [] : buildTimelineDetailEvents(row, previousRow, metricKey, delta);
+  const eventTotal = events.reduce((sum, event) => sum + event.amount, 0);
+  const adjustment = row.isCurrentBalance ? 0 : delta - eventTotal;
+  if (!row.isCurrentBalance && Math.round(adjustment) !== 0) {
+    events.push(createCashEvent("その他調整", adjustment));
+  }
+
+  const eventRows = events.length
+    ? events
+        .map(
+          (event) => `
+            <tr>
+              <td>${escapeHtml(event.label)}</td>
+              <td class="${event.amount < 0 ? "negative" : "positive"}">${escapeHtml(formatSignedCurrency(event.amount))}</td>
+            </tr>
+          `
+        )
+        .join("")
+    : `<tr><td colspan="2">前月からの計算はありません。</td></tr>`;
+  const formula = row.isCurrentBalance
+    ? "現在残高のため、前月からの計算はありません。"
+    : buildTimelineFormula(previousValue, events, currentValue);
+
+  return `<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>${escapeHtml(title)}</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 20px;
+        color: #1f2427;
+        background: #f8f3ea;
+        font-family: "BIZ UDPGothic", "Yu Gothic UI", "Meiryo", sans-serif;
+      }
+      header {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        align-items: center;
+        margin-bottom: 16px;
+      }
+      h1 { margin: 0; font-size: 20px; }
+      h2 { margin: 22px 0 10px; font-size: 15px; }
+      button {
+        border: 0;
+        border-radius: 999px;
+        padding: 10px 16px;
+        color: #fff;
+        background: #0f6a6f;
+        cursor: pointer;
+      }
+      .summary {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+      }
+      .box, .panel {
+        border: 1px solid rgba(98, 83, 63, 0.16);
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.72);
+      }
+      .box { padding: 12px; }
+      .box span {
+        display: block;
+        color: #576268;
+        font-size: 12px;
+      }
+      .box strong {
+        display: block;
+        margin-top: 6px;
+        font-size: 16px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      th, td {
+        padding: 10px 12px;
+        border-bottom: 1px solid rgba(98, 83, 63, 0.14);
+        text-align: left;
+      }
+      th:last-child, td:last-child { text-align: right; }
+      tr:last-child td { border-bottom: 0; }
+      .positive { color: #1c5aa6; font-weight: 700; }
+      .negative { color: #b14a35; font-weight: 700; }
+      .formula {
+        padding: 12px;
+        line-height: 1.7;
+        word-break: break-word;
+      }
+      .note {
+        margin: 12px 0 0;
+        color: #576268;
+        line-height: 1.7;
+      }
+      @media (max-width: 560px) {
+        body { padding: 14px; }
+        header, .summary { grid-template-columns: 1fr; }
+        header { align-items: flex-start; flex-direction: column; }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>${escapeHtml(title)}</h1>
+      <button type="button" onclick="window.close()">閉じる</button>
+    </header>
+    <section class="summary">
+      <div class="box"><span>前月残高</span><strong>${escapeHtml(row.isCurrentBalance ? "--" : formatCurrency(previousValue))}</strong></div>
+      <div class="box"><span>増減額</span><strong>${escapeHtml(row.isCurrentBalance ? "--" : formatSignedCurrency(delta))}</strong></div>
+      <div class="box"><span>今月残高</span><strong>${escapeHtml(formatCurrency(currentValue))}</strong></div>
+    </section>
+    ${row.isCurrentBalance ? `<p class="note">この行は現在残高です。前月からの計算はありません。予測計算は次の月から開始します。</p>` : ""}
+    <h2>計算内訳</h2>
+    <div class="panel">
+      <table>
+        <thead><tr><th>項目</th><th>金額</th></tr></thead>
+        <tbody>${eventRows}</tbody>
+      </table>
+    </div>
+    <h2>計算式</h2>
+    <div class="panel formula">${escapeHtml(formula)}</div>
+  </body>
+</html>`;
+}
+
+function buildTimelineDetailEvents(row, previousRow, metricKey, delta) {
+  if (metricKey === "effectiveCash") {
+    return [
+      createCashEvent("月収入", row.monthlyIncome),
+      createCashEvent("月支出", -row.monthlyExpenses),
+      ...(row.cashEvents ?? []),
+    ].filter((event) => event.amount);
+  }
+  if (row.detailEvents?.[metricKey]?.length) {
+    return row.detailEvents[metricKey].filter((event) => event.amount);
+  }
+  if (metricKey === "netWorth" && previousRow) {
+    const totalAssetsDelta = toNumber(row.totalAssets) - toNumber(previousRow.totalAssets);
+    const debtDelta = toNumber(row.debtBalance) - toNumber(previousRow.debtBalance);
+    return [
+      createCashEvent("資産合計の増減", totalAssetsDelta),
+      createCashEvent("負債増減の反映", -debtDelta),
+    ].filter((event) => event.amount);
+  }
+  return [createCashEvent("前月からの増減", delta)].filter((event) => event.amount);
+}
+
+function buildTimelineFormula(previousValue, events, currentValue) {
+  const terms = [formatCurrency(previousValue), ...events.map((event) => formatSignedCurrency(event.amount))];
+  return `${terms.join(" ")} = ${formatCurrency(currentValue)}`;
 }
 
 function switchView(view, skipButtonState = false) {
@@ -1633,6 +1871,19 @@ function switchView(view, skipButtonState = false) {
   dom.navButtons.forEach((button) => {
     button.classList.toggle("is-active", button.dataset.view === currentView);
   });
+}
+
+function openResearchWindow() {
+  const researchUrl = new URL(window.location.href);
+  researchUrl.searchParams.set("view", "research");
+  const width = Math.max(900, Math.round(window.outerWidth || window.innerWidth || 1280));
+  const height = Math.max(700, Math.round(window.outerHeight || window.innerHeight || 860));
+  const openedWindow = window.open(researchUrl.href, "lifewealthResearch", `width=${width},height=${height},resizable=yes,scrollbars=yes`);
+  if (!openedWindow) {
+    alert("調査画面を開けませんでした。ブラウザのポップアップ設定を確認してください。");
+    return;
+  }
+  openedWindow.focus();
 }
 
 async function handleImportClick() {
@@ -1924,8 +2175,34 @@ function buildForecastTimeline(snapshot) {
   let monthsSinceStart = 0;
   let retirementBonusPaid = false;
   const oneTimePensionPaidIds = new Set();
+  const currentAge = getAgeAtMonthEnd(state.profile.birthDate, start);
+  const currentPhase = getPhaseForAge(currentAge);
+  const currentDebtBalance = loans.reduce((sum, row) => sum + row.balance, 0) + cards.reduce((sum, row) => sum + row.balance, 0);
+  const currentTotalAssets = effectiveCash + dollarBalance + snapshot.bondLikeAssets + fundsBalance + stocksBalance + insuranceRunningBalance + snapshot.pensionBalance;
+  const currentNetWorth = currentTotalAssets - currentDebtBalance;
 
-  for (let cursor = new Date(start); cursor <= end; cursor = addMonths(cursor, 1)) {
+  timeline.push({
+    monthLabel: "現在残高",
+    phaseLabel: currentPhase.label,
+    age: currentAge,
+    effectiveCash,
+    dollarBalance,
+    bondLikeAssets: snapshot.bondLikeAssets,
+    fundsBalance,
+    stocksBalance,
+    insuranceBalance: insuranceRunningBalance,
+    pensionAssetBalance: snapshot.pensionBalance,
+    debtBalance: currentDebtBalance,
+    totalAssets: currentTotalAssets,
+    netWorth: currentNetWorth,
+    cashEvents: [],
+    detailEvents: {},
+    monthlyIncome: 0,
+    monthlyExpenses: 0,
+    isCurrentBalance: true,
+  });
+
+  for (let cursor = addMonths(start, 1); cursor <= end; cursor = addMonths(cursor, 1)) {
     const monthLabel = `${cursor.getFullYear()}/${String(cursor.getMonth() + 1).padStart(2, "0")}`;
     const age = getAgeAtMonthEnd(state.profile.birthDate, cursor);
     const phase = getPhaseForAge(age);
@@ -1934,6 +2211,13 @@ function buildForecastTimeline(snapshot) {
     const monthlyIncome = sumValues(phaseValues.incomes);
     const monthlyExpenses = sumValues(phaseValues.expenses) * inflationFactor;
     const cashEvents = [];
+    const detailEvents = {};
+    const addNamedDetailEvent = (metricKey, label, amount) => {
+      const normalizedAmount = toNumber(amount);
+      if (!normalizedAmount) return;
+      detailEvents[metricKey] = detailEvents[metricKey] ?? [];
+      detailEvents[metricKey].push(createCashEvent(label, normalizedAmount));
+    };
     const retirementBonus = Math.max(0, toNumber(state.phaseValues.retired.retirementBonus));
 
     if (!retirementBonusPaid && age >= state.phaseValues.retired.startAge) {
@@ -1975,17 +2259,20 @@ function buildForecastTimeline(snapshot) {
       if (age < plan.startAge) {
         effectiveCash -= plan.contributionPerMonth;
         plan.currentValue += plan.contributionPerMonth;
+        addNamedDetailEvent("pensionAssetBalance", `年金拠出: ${plan.name || "年金"}`, plan.contributionPerMonth);
         cashEvents.push(createCashEvent(`年金拠出: ${plan.name || "年金"}`, -plan.contributionPerMonth));
       } else if (plan.payoutType === "split") {
         const splitPayout = Math.min(Math.max(0, toNumber(plan.splitAmount)), Math.max(0, toNumber(plan.currentValue)));
         effectiveCash += splitPayout;
         plan.currentValue = Math.max(0, toNumber(plan.currentValue) - splitPayout);
+        addNamedDetailEvent("pensionAssetBalance", `年金受取: ${plan.name || "年金"}`, -splitPayout);
         cashEvents.push(createCashEvent(`年金受取: ${plan.name || "年金"}`, splitPayout));
       } else if (plan.payoutType === "lump" && !oneTimePensionPaidIds.has(plan.id)) {
         const lumpSumAmount = getPensionLumpSumAmount(plan, true);
         effectiveCash += lumpSumAmount;
         plan.currentValue = Math.max(0, toNumber(plan.currentValue) - lumpSumAmount);
         oneTimePensionPaidIds.add(plan.id);
+        addNamedDetailEvent("pensionAssetBalance", `年金一括受取: ${plan.name || "年金"}`, -lumpSumAmount);
         cashEvents.push(createCashEvent(`年金一括受取: ${plan.name || "年金"}`, lumpSumAmount));
       }
     });
@@ -1994,11 +2281,16 @@ function buildForecastTimeline(snapshot) {
 
     bondAssets.forEach((row) => {
       if (row.maturityDate && !row.isMatured && isSameMonthOrPast(row.maturityDate, cursor)) {
-        if (row.destination === "cash") {
+        const redemptionDestination = row.currency === "USD" ? "dollar" : row.destination;
+        if (redemptionDestination === "cash") {
           effectiveCash += row.projectedValue;
           cashEvents.push(createCashEvent(`償還入金: ${row.name || "債券"}`, row.projectedValue));
         }
-        if (row.destination === "dollar") dollarUnits += convertYenToUsd(row.projectedValue);
+        if (redemptionDestination === "dollar") {
+          dollarUnits += convertYenToUsd(row.projectedValue);
+          addNamedDetailEvent("dollarBalance", `償還入金: ${row.name || "債券"}`, row.projectedValue);
+        }
+        addNamedDetailEvent("bondLikeAssets", `償還: ${row.name || "債券"}`, -row.projectedValue);
         row.isMatured = true;
       }
     });
@@ -2063,6 +2355,9 @@ function buildForecastTimeline(snapshot) {
       totalAssets,
       netWorth,
       cashEvents,
+      detailEvents,
+      monthlyIncome,
+      monthlyExpenses,
     });
 
     monthsSinceStart += 1;

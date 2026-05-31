@@ -127,6 +127,12 @@ body {
   flex-wrap: wrap;
   gap: 0.7rem;
   margin: 1.3rem 0 1.4rem;
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  padding: 0.4rem 0;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
 }
 
 .nav-chip {
@@ -359,9 +365,11 @@ textarea { resize: vertical; min-height: 6.2rem; }
 
 .table-wrap {
   overflow: auto;
+  max-width: 100%;
   border-radius: 18px;
   border: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.55);
+  -webkit-overflow-scrolling: touch;
 }
 
 .subtle-wrap { margin-top: 1rem; padding: 1rem; }
@@ -374,6 +382,8 @@ textarea { resize: vertical; min-height: 6.2rem; }
 }
 
 .compact-table { min-width: 760px; }
+
+.timeline-wrap .compact-table { min-width: 1040px; }
 
 .data-table th, .data-table td {
   padding: 0.72rem 0.8rem;
@@ -406,6 +416,26 @@ textarea { resize: vertical; min-height: 6.2rem; }
 
 .data-table td.timeline-amount-flat {
   color: var(--ink);
+}
+
+.timeline-amount-button {
+  width: 100%;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  font-weight: inherit;
+  text-align: right;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.timeline-amount-button:hover,
+.timeline-amount-button:focus-visible {
+  text-decoration: underline;
 }
 
 .data-table input, .data-table select {
@@ -641,10 +671,12 @@ textarea { resize: vertical; min-height: 6.2rem; }
   .hero-panel, .panel { padding: 1rem; }
   .panel-heading { flex-direction: column; align-items: flex-start; }
   .main-nav {
-    position: sticky;
-    top: 0;
-    z-index: 4;
     padding: 0.4rem 0;
-    backdrop-filter: blur(10px);
+  }
+  .timeline-wrap .compact-table { min-width: 980px; }
+  .timeline-wrap .data-table th,
+  .timeline-wrap .data-table td {
+    padding: 0.55rem 0.5rem;
+    font-size: 0.82rem;
   }
 }
