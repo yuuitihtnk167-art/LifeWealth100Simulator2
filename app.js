@@ -9,6 +9,8 @@ const PHASES = [
   { key: "late", label: "終末期" },
 ];
 
+const IMPORTED_BOND_SOURCE_CATEGORIES = new Set(["bonds", "cash", "other"]);
+
 const INCOME_FIELDS = [
   { key: "salary", label: "給与" },
   { key: "nonSalary", label: "月給以外" },
@@ -258,6 +260,7 @@ function createBondRow(partial = {}) {
     name: "",
     institution: "",
     sourceCategory: "manual",
+    importKey: "",
     type: "bond",
     currentValue: 0,
     currency: "JPY",
@@ -1230,10 +1233,14 @@ function renderBondSection() {
 }
 
 function handleBondInput(event) {
+  if (event.type === "input" && shouldUseChangeOnlyForBondInput(event.target)) return;
   const id = event.target.dataset.bondId;
   const key = event.target.dataset.key;
   const row = state.manual.bondAssets.find((item) => item.id === id);
   if (!row) return;
+  if (IMPORTED_BOND_SOURCE_CATEGORIES.has(row.sourceCategory) && !row.importKey) {
+    row.importKey = buildImportedBondRowKey(row.sourceCategory, row.name, row.institution);
+  }
   row[key] = event.target.type === "checkbox" ? event.target.checked : event.target.value;
   if (key === "faceValue" || key === "currentValue") {
     row[key] = parseMoney(row[key]);
@@ -1249,6 +1256,10 @@ function handleBondInput(event) {
   } else {
     scheduleRender();
   }
+}
+
+function shouldUseChangeOnlyForBondInput(target) {
+  return target instanceof HTMLSelectElement || target instanceof HTMLInputElement && target.type === "checkbox";
 }
 
 function renderFundsSection() {
@@ -2050,28 +2061,26 @@ function hydrateStateFromImports() {
 
   const importedCandidates = buildImportedBondRows(sections);
   const importedKeys = new Set(importedCandidates.map((candidate) => getImportedBondRowKey(candidate)));
-
-  state.manual.bondAssets = state.manual.bondAssets.filter(
-    (row) => !["bonds", "cash", "other"].includes(row.sourceCategory) || importedKeys.has(getImportedBondRowKey(row))
-  );
+  const matchedImportedRows = new Set();
 
   importedCandidates.forEach((candidate) => {
-    const existing = state.manual.bondAssets.find(
-      (row) => getImportedBondRowKey(row) === getImportedBondRowKey(candidate)
-    );
+    const existing = findExistingImportedBondRow(candidate, matchedImportedRows);
     if (existing) {
       const shouldRefreshFaceValue =
         !toNumber(existing.faceValue) || (toNumber(existing.currentPrice) === 1 && Math.abs(toNumber(existing.faceValue) - toNumber(existing.currentValue)) < 1);
+      existing.importKey = getImportedBondRowKey(candidate);
+      existing.sourceCategory = candidate.sourceCategory;
       existing.currentValue = candidate.currentValue;
-      existing.excludeFromCash = candidate.excludeFromCash;
-      existing.currency = "JPY";
-      existing.type = candidate.type;
       if (shouldRefreshFaceValue) existing.faceValue = candidate.faceValue;
       if (!toNumber(existing.currentPrice)) existing.currentPrice = candidate.currentPrice;
     } else {
       state.manual.bondAssets.push(candidate);
     }
   });
+
+  state.manual.bondAssets = state.manual.bondAssets.filter(
+    (row) => !IMPORTED_BOND_SOURCE_CATEGORIES.has(row.sourceCategory) || importedKeys.has(getImportedBondRowKey(row))
+  );
 }
 
 function buildImportedBondRows(sections) {
@@ -2084,6 +2093,7 @@ function buildImportedBondRows(sections) {
         institution: item["保有金融機関"] || "",
         currentValue: importedValue,
         sourceCategory: "bonds",
+        importKey: buildImportedBondRowKey("bonds", item["銘柄名"] || "債券", item["保有金融機関"] || ""),
         type: "bond",
         currency: "JPY",
         faceValue: importedValue,
@@ -2103,6 +2113,7 @@ function buildImportedBondRows(sections) {
         institution: item["保有金融機関"] || "",
         currentValue: importedValue,
         sourceCategory: "cash",
+        importKey: buildImportedBondRowKey("cash", item["種類・名称"] || "現金除外資産", item["保有金融機関"] || ""),
         type: candidateConfig.type,
         excludeFromCash: candidateConfig.excludeFromCash,
         currency: "JPY",
@@ -2121,6 +2132,7 @@ function buildImportedBondRows(sections) {
         institution: item["保有金融機関"] || "",
         currentValue: importedValue,
         sourceCategory: "other",
+        importKey: buildImportedBondRowKey("other", item["名称"] || "その他の資産", item["保有金融機関"] || ""),
         type: item["名称"]?.includes("金") ? "volatile" : "locked",
         currency: "JPY",
         faceValue: importedValue,
@@ -3251,8 +3263,33 @@ function createCashEvent(label, amount) {
   };
 }
 
+function buildImportedBondRowKey(sourceCategory, name, institution) {
+  return `${sourceCategory || ""}::${name || ""}::${institution || ""}`;
+}
+
 function getImportedBondRowKey(row) {
-  return `${row.sourceCategory || ""}::${row.name || ""}::${row.institution || ""}`;
+  if (row.importKey) return row.importKey;
+  return buildImportedBondRowKey(row.sourceCategory, row.name, row.institution);
+}
+
+function findExistingImportedBondRow(candidate, matchedRows) {
+  const candidateKey = getImportedBondRowKey(candidate);
+  const exactMatch = state.manual.bondAssets.find(
+    (row) => !matchedRows.has(row) && getImportedBondRowKey(row) === candidateKey
+  );
+  if (exactMatch) {
+    matchedRows.add(exactMatch);
+    return exactMatch;
+  }
+
+  const legacyMatch = state.manual.bondAssets.find((row) => {
+    if (matchedRows.has(row) || row.importKey) return false;
+    if (row.sourceCategory !== candidate.sourceCategory) return false;
+    if ((row.institution || "") !== (candidate.institution || "")) return false;
+    return Math.abs(toNumber(row.currentValue) - toNumber(candidate.currentValue)) < 1;
+  });
+  if (legacyMatch) matchedRows.add(legacyMatch);
+  return legacyMatch;
 }
 
 function getImportedCashCandidateConfig(item) {
