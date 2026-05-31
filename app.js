@@ -1806,9 +1806,17 @@ function buildTimelineDetailWindowHtml(row, previousRow, metricKey) {
         line-height: 1.7;
       }
       @media (max-width: 560px) {
-        body { padding: 14px; }
+        body {
+          padding: 14px;
+          overflow-x: hidden;
+        }
         header, .summary { grid-template-columns: 1fr; }
         header { align-items: flex-start; flex-direction: column; }
+        .box, .panel { max-width: 100%; }
+        .box strong, td, .formula { overflow-wrap: anywhere; }
+        table { table-layout: fixed; }
+        th:first-child, td:first-child { width: 62%; }
+        th:last-child, td:last-child { width: 38%; }
       }
     </style>
   </head>
