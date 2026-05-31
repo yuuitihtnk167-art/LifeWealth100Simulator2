@@ -189,8 +189,6 @@ function bindReactiveInput(element, applyValue) {
       applyValue(event);
       if (eventName === "change") {
         saveAndRender();
-      } else {
-        scheduleRender();
       }
     });
   });
@@ -547,6 +545,14 @@ function enhanceMoneyInputs() {
     if (document.activeElement !== input) {
       input.value = formatMoneyInputValue(input.value);
     }
+  });
+  document.querySelectorAll("input[type=\"number\"]").forEach((input) => {
+    if (!(input instanceof HTMLInputElement)) return;
+    input.type = "text";
+    input.inputMode = "decimal";
+    input.dataset.inputKind = input.dataset.inputKind || "number";
+    input.autocomplete = "off";
+    input.spellcheck = false;
   });
 }
 
@@ -955,8 +961,6 @@ function renderPhaseStartsForm() {
       state.phaseValues[key].startAge = Math.max(0, Math.round(toNumber(event.target.value)));
       if (event.type === "change") {
         saveAndRender();
-      } else {
-        scheduleRender();
       }
     };
     input.addEventListener("input", handler);
@@ -969,8 +973,6 @@ function renderPhaseStartsForm() {
       state.phaseValues[key].retirementBonus = Math.max(0, parseMoney(event.target.value));
       if (event.type === "change") {
         saveAndRender();
-      } else {
-        scheduleRender();
       }
     };
     input.addEventListener("input", handler);
@@ -1041,8 +1043,6 @@ function renderCashflowSections() {
       bucket[key] = parseMoney(event.target.value);
       if (event.type === "change") {
         saveAndRender();
-      } else {
-        scheduleRender();
       }
     };
     input.addEventListener("input", handler);
@@ -1253,7 +1253,7 @@ function handleBondInput(event) {
   }
   if (event.type === "change") {
     saveAndRender();
-  } else {
+  } else if (!shouldDeferTextInputRender(event)) {
     scheduleRender();
   }
 }
@@ -2943,8 +2943,6 @@ function bindSimpleNumericInput(selector, path, parser = toNumber) {
     setByPath(state, path, parser(event.target.value));
     if (event.type === "change") {
       saveAndRender();
-    } else {
-      scheduleRender();
     }
   };
   input.addEventListener("input", handler);
@@ -2957,8 +2955,7 @@ function shouldDeferTextInputRender(event) {
   const target = event.target;
   if (target instanceof HTMLTextAreaElement) return true;
   if (!(target instanceof HTMLInputElement)) return false;
-  if (target.dataset.inputKind === "money") return false;
-  return ["text", "search", "tel", "url", "email", "password"].includes((target.type || "text").toLowerCase());
+  return target.dataset.inputKind === "money" || ["text", "search", "tel", "url", "email", "password", "number"].includes((target.type || "text").toLowerCase());
 }
 
 function bindTableInputs(container, idAttribute, sourceArray, numericKeys, moneyKeys = []) {
