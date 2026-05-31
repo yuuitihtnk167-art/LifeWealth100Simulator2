@@ -1688,7 +1688,13 @@ function openTimelineDetailWindow(rowIndex, metricKey) {
   if (!row || !TIMELINE_DETAIL_METRICS[metricKey]) return;
 
   const previousRow = rowIndex > 0 ? timelineRows[rowIndex - 1] : null;
-  const html = buildTimelineDetailWindowHtml(row, previousRow, metricKey);
+  const detail = buildTimelineDetailViewModel(row, previousRow, metricKey);
+  if (window.matchMedia("(max-width: 720px)").matches) {
+    openTimelineDetailModal(detail);
+    return;
+  }
+
+  const html = buildTimelineDetailWindowHtml(detail);
   const detailWindow = window.open("", "lifewealthTimelineDetail", "width=640,height=760,resizable=yes,scrollbars=yes");
   if (!detailWindow) {
     alert("詳細ウィンドウを開けませんでした。ブラウザのポップアップ設定を確認してください。");
@@ -1701,7 +1707,7 @@ function openTimelineDetailWindow(rowIndex, metricKey) {
   detailWindow.focus();
 }
 
-function buildTimelineDetailWindowHtml(row, previousRow, metricKey) {
+function buildTimelineDetailViewModel(row, previousRow, metricKey) {
   const metricLabel = TIMELINE_DETAIL_METRICS[metricKey];
   const currentValue = toNumber(row[metricKey]);
   const previousValue = previousRow ? toNumber(previousRow[metricKey]) : currentValue;
@@ -1730,12 +1736,72 @@ function buildTimelineDetailWindowHtml(row, previousRow, metricKey) {
     ? "現在残高のため、前月からの計算はありません。"
     : buildTimelineFormula(previousValue, events, currentValue);
 
+  return {
+    title,
+    eventRows,
+    formula,
+    isCurrentBalance: row.isCurrentBalance,
+    previousValue,
+    delta,
+    currentValue,
+  };
+}
+
+function openTimelineDetailModal(detail) {
+  document.querySelector(".timeline-detail-modal")?.remove();
+  const modal = document.createElement("div");
+  modal.className = "timeline-detail-modal";
+  modal.innerHTML = `
+    <div class="timeline-detail-modal__backdrop" data-close-timeline-detail></div>
+    <section class="timeline-detail-modal__sheet" role="dialog" aria-modal="true" aria-label="${escapeHtml(detail.title)}">
+      ${buildTimelineDetailContentHtml(detail, `<button type="button" data-close-timeline-detail>閉じる</button>`)}
+    </section>
+  `;
+  const close = () => {
+    modal.remove();
+    document.removeEventListener("keydown", handleKeydown);
+  };
+  const handleKeydown = (event) => {
+    if (event.key === "Escape") close();
+  };
+  modal.querySelectorAll("[data-close-timeline-detail]").forEach((element) => {
+    element.addEventListener("click", close);
+  });
+  document.addEventListener("keydown", handleKeydown);
+  document.body.appendChild(modal);
+}
+
+function buildTimelineDetailContentHtml(detail, closeButtonHtml) {
+  return `
+    <header>
+      <h1>${escapeHtml(detail.title)}</h1>
+      ${closeButtonHtml}
+    </header>
+    <section class="summary">
+      <div class="box"><span>前月残高</span><strong>${escapeHtml(detail.isCurrentBalance ? "--" : formatCurrency(detail.previousValue))}</strong></div>
+      <div class="box"><span>増減額</span><strong>${escapeHtml(detail.isCurrentBalance ? "--" : formatSignedCurrency(detail.delta))}</strong></div>
+      <div class="box"><span>今月残高</span><strong>${escapeHtml(formatCurrency(detail.currentValue))}</strong></div>
+    </section>
+    ${detail.isCurrentBalance ? `<p class="note">この行は現在残高です。前月からの計算はありません。予測計算は次の月から開始します。</p>` : ""}
+    <h2>計算内訳</h2>
+    <div class="panel">
+      <table>
+        <thead><tr><th>項目</th><th>金額</th></tr></thead>
+        <tbody>${detail.eventRows}</tbody>
+      </table>
+    </div>
+    <h2>計算式</h2>
+    <div class="panel formula">${escapeHtml(detail.formula)}</div>
+  `;
+}
+
+function buildTimelineDetailWindowHtml(detail) {
   return `<!doctype html>
 <html lang="ja">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>${escapeHtml(title)}</title>
+    <title>${escapeHtml(detail.title)}</title>
     <style>
       body {
         margin: 0;
@@ -1806,32 +1872,22 @@ function buildTimelineDetailWindowHtml(row, previousRow, metricKey) {
         line-height: 1.7;
       }
       @media (max-width: 560px) {
-        body { padding: 14px; }
+        body {
+          padding: 14px;
+          overflow-x: hidden;
+        }
         header, .summary { grid-template-columns: 1fr; }
         header { align-items: flex-start; flex-direction: column; }
+        .box, .panel { max-width: 100%; }
+        .box strong, td, .formula { overflow-wrap: anywhere; }
+        table { table-layout: fixed; }
+        th:first-child, td:first-child { width: 62%; }
+        th:last-child, td:last-child { width: 38%; }
       }
     </style>
   </head>
   <body>
-    <header>
-      <h1>${escapeHtml(title)}</h1>
-      <button type="button" onclick="window.close()">閉じる</button>
-    </header>
-    <section class="summary">
-      <div class="box"><span>前月残高</span><strong>${escapeHtml(row.isCurrentBalance ? "--" : formatCurrency(previousValue))}</strong></div>
-      <div class="box"><span>増減額</span><strong>${escapeHtml(row.isCurrentBalance ? "--" : formatSignedCurrency(delta))}</strong></div>
-      <div class="box"><span>今月残高</span><strong>${escapeHtml(formatCurrency(currentValue))}</strong></div>
-    </section>
-    ${row.isCurrentBalance ? `<p class="note">この行は現在残高です。前月からの計算はありません。予測計算は次の月から開始します。</p>` : ""}
-    <h2>計算内訳</h2>
-    <div class="panel">
-      <table>
-        <thead><tr><th>項目</th><th>金額</th></tr></thead>
-        <tbody>${eventRows}</tbody>
-      </table>
-    </div>
-    <h2>計算式</h2>
-    <div class="panel formula">${escapeHtml(formula)}</div>
+    ${buildTimelineDetailContentHtml(detail, `<button type="button" onclick="window.close()">閉じる</button>`)}
   </body>
 </html>`;
 }
