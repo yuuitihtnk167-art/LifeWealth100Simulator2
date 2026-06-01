@@ -10,6 +10,7 @@ const PHASES = [
 ];
 
 const IMPORTED_BOND_SOURCE_CATEGORIES = new Set(["bonds", "cash", "other"]);
+const BOND_REVIEW_FIELDS = ["type", "excludeFromCash", "destination"];
 
 const INCOME_FIELDS = [
   { key: "salary", label: "給与" },
@@ -58,6 +59,7 @@ const dom = {
   birthDate: document.querySelector("#birth-date"),
   inflationRate: document.querySelector("#inflation-rate"),
   marketRiseAdjustmentRate: document.querySelector("#market-rise-adjustment-rate"),
+  macroEconomicSlideAdjustmentRate: document.querySelector("#macro-economic-slide-adjustment-rate"),
   usdJpyRate: document.querySelector("#usd-jpy-rate"),
   fetchUsdJpyRateButton: document.querySelector("#fetch-usd-jpy-rate"),
   usdJpyRateStatus: document.querySelector("#usd-jpy-rate-status"),
@@ -142,9 +144,18 @@ function bindEvents() {
   });
   bindReactiveInput(dom.inflationRate, (event) => {
     state.assumptions.inflationRate = toNumber(event.target.value);
+    state.assumptions.marketRiseAdjustmentRateIsManual = false;
+    state.assumptions.macroEconomicSlideAdjustmentRateIsManual = false;
+    syncAutomaticMarketRiseAdjustmentRate();
+    syncAutomaticMacroEconomicSlideAdjustmentRate();
   });
   bindReactiveInput(dom.marketRiseAdjustmentRate, (event) => {
     state.assumptions.marketRiseAdjustmentRate = toNumber(event.target.value);
+    state.assumptions.marketRiseAdjustmentRateIsManual = true;
+  });
+  bindReactiveInput(dom.macroEconomicSlideAdjustmentRate, (event) => {
+    state.assumptions.macroEconomicSlideAdjustmentRate = toNumber(event.target.value);
+    state.assumptions.macroEconomicSlideAdjustmentRateIsManual = true;
   });
   bindReactiveInput(dom.usdJpyRate, (event) => {
     state.assumptions.usdJpyRate = toNumber(event.target.value);
@@ -194,6 +205,40 @@ function bindReactiveInput(element, applyValue) {
   });
 }
 
+function syncAutomaticMarketRiseAdjustmentRate() {
+  if (state.assumptions.marketRiseAdjustmentRateIsManual) return;
+
+  state.assumptions.marketRiseAdjustmentRate = getAutomaticMarketRiseAdjustmentRate(state.assumptions.inflationRate);
+  if (dom.marketRiseAdjustmentRate && document.activeElement !== dom.marketRiseAdjustmentRate) {
+    dom.marketRiseAdjustmentRate.value = state.assumptions.marketRiseAdjustmentRate;
+  }
+}
+
+function getAutomaticMarketRiseAdjustmentRate(inflationRate) {
+  return Math.round(toNumber(inflationRate) * 50) / 100;
+}
+
+function isAutomaticMarketRiseAdjustmentRate(marketRiseAdjustmentRate, inflationRate) {
+  return Math.abs(toNumber(marketRiseAdjustmentRate) - getAutomaticMarketRiseAdjustmentRate(inflationRate)) < 0.000001;
+}
+
+function syncAutomaticMacroEconomicSlideAdjustmentRate() {
+  if (state.assumptions.macroEconomicSlideAdjustmentRateIsManual) return;
+
+  state.assumptions.macroEconomicSlideAdjustmentRate = getAutomaticMacroEconomicSlideAdjustmentRate(state.assumptions.inflationRate);
+  if (dom.macroEconomicSlideAdjustmentRate && document.activeElement !== dom.macroEconomicSlideAdjustmentRate) {
+    dom.macroEconomicSlideAdjustmentRate.value = state.assumptions.macroEconomicSlideAdjustmentRate;
+  }
+}
+
+function getAutomaticMacroEconomicSlideAdjustmentRate(inflationRate) {
+  return Math.round(toNumber(inflationRate) * 80) / 100;
+}
+
+function isAutomaticMacroEconomicSlideAdjustmentRate(macroEconomicSlideAdjustmentRate, inflationRate) {
+  return Math.abs(toNumber(macroEconomicSlideAdjustmentRate) - getAutomaticMacroEconomicSlideAdjustmentRate(inflationRate)) < 0.000001;
+}
+
 function createDefaultState() {
   const phaseValues = {};
   PHASES.forEach((phase, index) => {
@@ -216,6 +261,9 @@ function createDefaultState() {
     assumptions: {
       inflationRate: 2,
       marketRiseAdjustmentRate: 1,
+      marketRiseAdjustmentRateIsManual: false,
+      macroEconomicSlideAdjustmentRate: 1.6,
+      macroEconomicSlideAdjustmentRateIsManual: false,
       usdJpyRate: 150,
       usdJpyRateSource: "manual",
       usdJpyRateReferenceDate: "",
@@ -261,7 +309,6 @@ function createBondRow(partial = {}) {
     importKey: "",
     type: "bond",
     currentValue: 0,
-    currency: "JPY",
     faceValue: 0,
     currentPrice: 0,
     maturityDate: "",
@@ -269,6 +316,7 @@ function createBondRow(partial = {}) {
     excludeFromCash: false,
     destination: "cash",
     notes: "",
+    reviewRequired: {},
     ...partial,
   };
 }
@@ -345,11 +393,12 @@ function loadState() {
 
 function mergeWithDefault(candidate) {
   const base = createDefaultState();
+  const assumptions = normalizeAssumptions({ ...base.assumptions, ...(candidate.assumptions ?? {}) }, candidate.assumptions ?? {});
   return {
     ...base,
     ...candidate,
     profile: { ...base.profile, ...candidate.profile },
-    assumptions: { ...base.assumptions, ...candidate.assumptions },
+    assumptions,
     imports: { ...base.imports, ...candidate.imports },
     manual: {
       ...base.manual,
@@ -377,6 +426,31 @@ function mergeWithDefault(candidate) {
     }, {}),
     computed: { ...base.computed, ...candidate.computed },
   };
+}
+
+function normalizeAssumptions(assumptions, candidateAssumptions) {
+  const normalized = { ...assumptions };
+  if (typeof candidateAssumptions.marketRiseAdjustmentRateIsManual !== "boolean") {
+    normalized.marketRiseAdjustmentRateIsManual = !isAutomaticMarketRiseAdjustmentRate(
+      normalized.marketRiseAdjustmentRate,
+      normalized.inflationRate
+    );
+  }
+  if (!normalized.marketRiseAdjustmentRateIsManual) {
+    normalized.marketRiseAdjustmentRate = getAutomaticMarketRiseAdjustmentRate(normalized.inflationRate);
+  }
+  if (!Object.hasOwn(candidateAssumptions, "macroEconomicSlideAdjustmentRate")) {
+    normalized.macroEconomicSlideAdjustmentRateIsManual = false;
+  } else if (typeof candidateAssumptions.macroEconomicSlideAdjustmentRateIsManual !== "boolean") {
+    normalized.macroEconomicSlideAdjustmentRateIsManual = !isAutomaticMacroEconomicSlideAdjustmentRate(
+      normalized.macroEconomicSlideAdjustmentRate,
+      normalized.inflationRate
+    );
+  }
+  if (!normalized.macroEconomicSlideAdjustmentRateIsManual) {
+    normalized.macroEconomicSlideAdjustmentRate = getAutomaticMacroEconomicSlideAdjustmentRate(normalized.inflationRate);
+  }
+  return normalized;
 }
 
 function saveState() {
@@ -559,7 +633,10 @@ function enhanceMoneyInputs() {
 function renderTopForm() {
   dom.birthDate.value = state.profile.birthDate;
   dom.inflationRate.value = state.assumptions.inflationRate ?? 2;
-  dom.marketRiseAdjustmentRate.value = state.assumptions.marketRiseAdjustmentRate ?? 1;
+  dom.marketRiseAdjustmentRate.value =
+    state.assumptions.marketRiseAdjustmentRate ?? getAutomaticMarketRiseAdjustmentRate(state.assumptions.inflationRate);
+  dom.macroEconomicSlideAdjustmentRate.value =
+    state.assumptions.macroEconomicSlideAdjustmentRate ?? getAutomaticMacroEconomicSlideAdjustmentRate(state.assumptions.inflationRate);
   dom.usdJpyRate.value = state.assumptions.usdJpyRate ?? 150;
   dom.endAge.value = state.profile.endAge ?? 100;
   renderUsdJpyRateStatus();
@@ -643,8 +720,7 @@ function renderAssetCards() {
   }
 
   const cards = [
-    { label: "現金", value: snapshot.importedCashTotal + snapshot.pointsAsCash, view: "dashboard", note: "取込ベースの現金カテゴリとポイント" },
-    { label: "使える現金", value: snapshot.effectiveCash, view: "dashboard", note: "現金から除外した資産を差し引いた残高" },
+    { label: "使える現金", value: snapshot.effectiveCash, view: "cash", note: "現金から除外した資産を差し引いた残高" },
     { label: "債券", value: snapshot.bondLikeAssets, view: "bonds", note: "現金から除外する資産を含む" },
     { label: "投資信託・ETF", value: snapshot.fundsBalance, view: "funds", note: "CSVから取得した現在残高" },
     { label: "株式", value: snapshot.stocksBalance, view: "stocks", note: "個別株の現在残高" },
@@ -653,9 +729,6 @@ function renderAssetCards() {
     { label: "年金", value: snapshot.pensionBalance, view: "pension", note: "開始年齢と受給条件は手入力" },
     { label: "負債", value: state.computed.summary?.currentDebt ?? 0, view: "debt", note: "純資産計算に使用" },
   ];
-
-  cards[0].view = "cash";
-  cards[1].view = "cash";
 
   dom.assetCardGrid.innerHTML = cards
     .map(
@@ -1132,7 +1205,7 @@ function renderBondSection() {
     <tr>
       <td>${renderTextInput(`data-bond-id="${escapeHtml(row.id)}" data-key="name"`, row.name)}</td>
       <td>${renderTextInput(`data-bond-id="${escapeHtml(row.id)}" data-key="institution"`, row.institution)}</td>
-      <td>
+      <td class="${getBondReviewCellClass(row, "type")}">
         <select data-bond-id="${escapeHtml(row.id)}" data-key="type">
           ${[
             ["bond", "債券"],
@@ -1144,18 +1217,13 @@ function renderBondSection() {
             .join("")}
         </select>
       </td>
-      <td><input type="checkbox" data-bond-id="${escapeHtml(row.id)}" data-key="excludeFromCash" ${row.excludeFromCash ? "checked" : ""}></td>
-      <td>
-        <select data-bond-id="${escapeHtml(row.id)}" data-key="currency">
-          ${["JPY", "USD", "OTHER"].map((code) => `<option value="${code}" ${row.currency === code ? "selected" : ""}>${code}</option>`).join("")}
-        </select>
-      </td>
+      <td class="${getBondReviewCellClass(row, "excludeFromCash")}"><input type="checkbox" data-bond-id="${escapeHtml(row.id)}" data-key="excludeFromCash" ${row.excludeFromCash ? "checked" : ""}></td>
       <td><input type="number" step="0.0001" data-bond-id="${escapeHtml(row.id)}" data-key="faceValue" value="${escapeHtml(String(row.faceValue ?? 0))}"></td>
       <td><input type="number" step="0.0001" data-bond-id="${escapeHtml(row.id)}" data-key="currentPrice" value="${escapeHtml(String(row.currentPrice ?? 0))}"></td>
       <td class="mono">${formatCurrency(getBondDisplayValue(row))}</td>
       <td><input type="date" data-bond-id="${escapeHtml(row.id)}" data-key="maturityDate" value="${escapeHtml(row.maturityDate || "")}"></td>
       <td><input type="number" step="0.01" data-bond-id="${escapeHtml(row.id)}" data-key="rate" value="${escapeHtml(String(row.rate ?? 0))}"></td>
-      <td>
+      <td class="${getBondReviewCellClass(row, "destination")}">
         <select data-bond-id="${escapeHtml(row.id)}" data-key="destination">
           ${[
             ["cash", "現金"],
@@ -1177,8 +1245,7 @@ function renderBondSection() {
         <th>保有金融機関</th>
         <th>区分</th>
         <th>現金から除外</th>
-        <th>通貨</th>
-        <th>保有額面</th>
+        <th>保有額面(円)</th>
         <th>現在値</th>
         <th>円評価額</th>
         <th>償還日</th>
@@ -1199,8 +1266,7 @@ function renderBondSection() {
         <th>保有金融機関</th>
         <th>区分</th>
         <th>現金から除外</th>
-        <th>通貨</th>
-        <th>保有額面</th>
+        <th>保有額面(円)</th>
         <th>現在値</th>
         <th>円評価額</th>
         <th>償還日</th>
@@ -1213,7 +1279,7 @@ function renderBondSection() {
       ${
         maturedRows.length
           ? maturedRows.map(renderBondInputRow).join("")
-          : `<tr><td colspan="12">まだありません。</td></tr>`
+          : `<tr><td colspan="11">まだありません。</td></tr>`
       }
     </tbody>
   `;
@@ -1222,6 +1288,7 @@ function renderBondSection() {
     table.querySelectorAll("[data-bond-id]").forEach((input) => {
       input.addEventListener("input", handleBondInput);
       input.addEventListener("change", handleBondInput);
+      input.addEventListener("click", handleBondReviewClick);
     });
     table.querySelectorAll("[data-remove-bond]").forEach((button) => {
       button.addEventListener("click", () => {
@@ -1230,6 +1297,21 @@ function renderBondSection() {
       });
     });
   });
+}
+
+function getBondReviewCellClass(row, key) {
+  return row.reviewRequired?.[key] ? "needs-review" : "";
+}
+
+function handleBondReviewClick(event) {
+  const key = event.target.dataset.key;
+  if (!BOND_REVIEW_FIELDS.includes(key)) return;
+
+  const row = state.manual.bondAssets.find((item) => item.id === event.target.dataset.bondId);
+  if (!row || !row.reviewRequired?.[key]) return;
+
+  row.reviewRequired = { ...(row.reviewRequired ?? {}), [key]: false };
+  scheduleRender();
 }
 
 function handleBondInput(event) {
@@ -1250,6 +1332,9 @@ function handleBondInput(event) {
   }
   if (row.faceValue > 0 && row.currentPrice > 0) {
     row.currentValue = row.faceValue * row.currentPrice;
+  }
+  if (BOND_REVIEW_FIELDS.includes(key)) {
+    row.reviewRequired = { ...(row.reviewRequired ?? {}), [key]: false };
   }
   if (event.type === "change") {
     saveAndRender();
@@ -1548,10 +1633,28 @@ function renderDebtSection() {
 function registerServiceWorker() {
   if (!("serviceWorker" in navigator)) return;
   if (!["http:", "https:"].includes(window.location.protocol)) return;
+  if (isLocalDevelopmentHost()) {
+    unregisterLocalServiceWorkers();
+    return;
+  }
 
   window.addEventListener("load", () => {
     navigator.serviceWorker.register("./sw.js").catch((error) => {
       console.warn("Service worker registration failed.", error);
+    });
+  });
+}
+
+function isLocalDevelopmentHost() {
+  return ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
+}
+
+function unregisterLocalServiceWorkers() {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.getRegistrations?.().then((registrations) => {
+      registrations.forEach((registration) => registration.unregister());
+    }).catch((error) => {
+      console.warn("Local service worker cleanup failed.", error);
     });
   });
 }
@@ -2066,13 +2169,7 @@ function hydrateStateFromImports() {
   importedCandidates.forEach((candidate) => {
     const existing = findExistingImportedBondRow(candidate, matchedImportedRows);
     if (existing) {
-      const shouldRefreshFaceValue =
-        !toNumber(existing.faceValue) || (toNumber(existing.currentPrice) === 1 && Math.abs(toNumber(existing.faceValue) - toNumber(existing.currentValue)) < 1);
-      existing.importKey = getImportedBondRowKey(candidate);
-      existing.sourceCategory = candidate.sourceCategory;
-      existing.currentValue = candidate.currentValue;
-      if (shouldRefreshFaceValue) existing.faceValue = candidate.faceValue;
-      if (!toNumber(existing.currentPrice)) existing.currentPrice = candidate.currentPrice;
+      updateImportedBondRow(existing, candidate);
     } else {
       state.manual.bondAssets.push(candidate);
     }
@@ -2083,22 +2180,44 @@ function hydrateStateFromImports() {
   );
 }
 
+function updateImportedBondRow(existing, candidate) {
+  const nextReviewRequired = { ...(existing.reviewRequired ?? {}) };
+  BOND_REVIEW_FIELDS.forEach((key) => {
+    if (!(key in nextReviewRequired)) nextReviewRequired[key] = true;
+  });
+
+  existing.importKey = getImportedBondRowKey(candidate);
+  existing.sourceCategory = candidate.sourceCategory;
+  existing.name = candidate.name;
+  existing.institution = candidate.institution;
+  existing.currentValue = candidate.currentValue;
+  existing.faceValue = candidate.faceValue;
+  existing.currentPrice = candidate.currentPrice;
+  if (candidate.maturityDate) existing.maturityDate = candidate.maturityDate;
+  if (toNumber(candidate.rate)) existing.rate = candidate.rate;
+  existing.reviewRequired = nextReviewRequired;
+}
+
 function buildImportedBondRows(sections) {
   const rows = [];
   (sections["債券"]?.items ?? []).forEach((item) => {
     const importedValue = parseMoney(item["評価額"]);
+    const name = item["銘柄名"] || "債券";
+    const institution = item["保有金融機関"] || "";
     rows.push(
       createBondRow({
-        name: item["銘柄名"] || "債券",
-        institution: item["保有金融機関"] || "",
+        name,
+        institution,
         currentValue: importedValue,
         sourceCategory: "bonds",
-        importKey: buildImportedBondRowKey("bonds", item["銘柄名"] || "債券", item["保有金融機関"] || ""),
+        importKey: buildImportedBondRowKey("bonds", name, institution),
         type: "bond",
-        currency: "JPY",
         faceValue: importedValue,
         currentPrice: 1,
+        maturityDate: inferBondMaturityDate(item),
+        rate: inferBondRate(item),
         destination: "cash",
+        reviewRequired: createImportedBondReviewRequired(),
       })
     );
   });
@@ -2107,42 +2226,83 @@ function buildImportedBondRows(sections) {
     const candidateConfig = getImportedCashCandidateConfig(item);
     if (!candidateConfig) return;
     const importedValue = parseMoney(item["残高"]);
+    const name = item["種類・名称"] || "現金除外資産";
+    const institution = item["保有金融機関"] || "";
     rows.push(
       createBondRow({
-        name: item["種類・名称"] || "現金除外資産",
-        institution: item["保有金融機関"] || "",
+        name,
+        institution,
         currentValue: importedValue,
         sourceCategory: "cash",
-        importKey: buildImportedBondRowKey("cash", item["種類・名称"] || "現金除外資産", item["保有金融機関"] || ""),
+        importKey: buildImportedBondRowKey("cash", name, institution),
         type: candidateConfig.type,
         excludeFromCash: candidateConfig.excludeFromCash,
-        currency: "JPY",
         faceValue: importedValue,
         currentPrice: 1,
         destination: candidateConfig.destination,
+        reviewRequired: createImportedBondReviewRequired(),
       })
     );
   });
 
   (sections["その他の資産"]?.items ?? []).forEach((item) => {
     const importedValue = parseMoney(item["現在価値"]);
+    const name = item["名称"] || "その他の資産";
+    const institution = item["保有金融機関"] || "";
     rows.push(
       createBondRow({
-        name: item["名称"] || "その他の資産",
-        institution: item["保有金融機関"] || "",
+        name,
+        institution,
         currentValue: importedValue,
         sourceCategory: "other",
-        importKey: buildImportedBondRowKey("other", item["名称"] || "その他の資産", item["保有金融機関"] || ""),
-        type: item["名称"]?.includes("金") ? "volatile" : "locked",
-        currency: "JPY",
+        importKey: buildImportedBondRowKey("other", name, institution),
+        type: name.includes("金") ? "volatile" : "locked",
         faceValue: importedValue,
         currentPrice: 1,
         destination: "keep",
+        reviewRequired: createImportedBondReviewRequired(),
       })
     );
   });
 
   return rows;
+}
+
+function createImportedBondReviewRequired() {
+  return BOND_REVIEW_FIELDS.reduce((acc, key) => ({ ...acc, [key]: true }), {});
+}
+
+function inferBondMaturityDate(item) {
+  const columnValue = getFirstPresentValue(item, ["満期日", "償還日", "満期年月日", "期限"]);
+  return parseImportedBondDate(columnValue) || parseImportedBondDate(item["銘柄名"]);
+}
+
+function inferBondRate(item) {
+  const columnValue = getFirstPresentValue(item, ["利率", "年利", "クーポン", "表面利率", "利率(年)", "利率（年）"]);
+  return parseImportedBondRate(columnValue) ?? parseImportedBondRate(item["銘柄名"]) ?? 0;
+}
+
+function getFirstPresentValue(object, keys) {
+  for (const key of keys) {
+    const value = object?.[key];
+    if (value !== undefined && value !== null && String(value).trim() !== "") return value;
+  }
+  return "";
+}
+
+function parseImportedBondDate(value) {
+  const text = String(value ?? "");
+  const match = text.match(/(20\d{2})[/-](\d{1,2})[/-](\d{1,2})/) || text.match(/(20\d{2})年(\d{1,2})月(\d{1,2})日?/);
+  if (!match) return "";
+  const [, year, month, day] = match;
+  return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+}
+
+function parseImportedBondRate(value) {
+  const text = String(value ?? "");
+  const match = text.match(/(\d+(?:\.\d+)?)\s*[%％]/);
+  if (!match) return null;
+  return toNumber(match[1]);
 }
 
 function computeProjection() {
@@ -2196,7 +2356,6 @@ function buildWarnings(snapshot) {
   if (!state.profile.birthDate) warnings.push({ location: "基本情報", message: "誕生日が未入力です。" });
 
   state.manual.bondAssets.forEach((row) => {
-    if (!row.currency) warnings.push({ location: "債券", message: `${row.name || "債券"} の通貨が未入力です。` });
     if (!row.maturityDate && row.type === "bond") warnings.push({ location: "債券", message: `${row.name || "債券"} の償還日が未入力です。` });
   });
 
@@ -2223,6 +2382,8 @@ function buildForecastTimeline(snapshot) {
   const end = getSimulationEndDate(state.profile.birthDate, state.profile.endAge);
   const monthlyInflationRate = annualToMonthlyRate(state.assumptions.inflationRate);
   const marketRiseAdjustmentRate = toNumber(state.assumptions.marketRiseAdjustmentRate);
+  const monthlyMacroEconomicSlideAdjustmentRate = annualToMonthlyRate(state.assumptions.macroEconomicSlideAdjustmentRate);
+  const pensionPhaseStartDate = getPhaseStartDate("pension");
   const timeline = [];
 
   let effectiveCash = snapshot.effectiveCash;
@@ -2276,7 +2437,7 @@ function buildForecastTimeline(snapshot) {
     const phase = getPhaseForAge(age);
     const phaseValues = state.phaseValues[phase.key];
     const inflationFactor = (1 + monthlyInflationRate) ** monthsSinceStart;
-    const monthlyIncome = sumValues(phaseValues.incomes);
+    const monthlyIncome = getAdjustedMonthlyIncome(phase, phaseValues, cursor, pensionPhaseStartDate, monthlyMacroEconomicSlideAdjustmentRate);
     const monthlyExpenses = sumValues(phaseValues.expenses) * inflationFactor;
     const cashEvents = [];
     const detailEvents = {};
@@ -2349,7 +2510,7 @@ function buildForecastTimeline(snapshot) {
 
     bondAssets.forEach((row) => {
       if (row.maturityDate && !row.isMatured && isSameMonthOrPast(row.maturityDate, cursor)) {
-        const redemptionDestination = row.currency === "USD" ? "dollar" : row.destination;
+        const redemptionDestination = row.destination;
         if (redemptionDestination === "cash") {
           effectiveCash += row.projectedValue;
           cashEvents.push(createCashEvent(`償還入金: ${row.name || "債券"}`, row.projectedValue));
@@ -2487,6 +2648,36 @@ function getPhaseForAge(age) {
     if (age >= state.phaseValues[phase.key].startAge) return phase;
   }
   return PHASES[0];
+}
+
+function getAdjustedMonthlyIncome(phase, phaseValues, targetDate, pensionPhaseStartDate, monthlyMacroEconomicSlideAdjustmentRate) {
+  const baseIncome = sumValues(phaseValues.incomes);
+  if (!isPensionPhaseOrLater(phase.key)) return baseIncome;
+
+  const pensionSalary = toNumber(phaseValues.incomes.salary);
+  if (!pensionSalary) return baseIncome;
+
+  const monthsSincePensionStart = Math.max(0, getMonthDifference(pensionPhaseStartDate, targetDate));
+  const adjustedPensionSalary = pensionSalary * ((1 + monthlyMacroEconomicSlideAdjustmentRate) ** monthsSincePensionStart);
+  return baseIncome - pensionSalary + adjustedPensionSalary;
+}
+
+function isPensionPhaseOrLater(phaseKey) {
+  return getPhaseIndex(phaseKey) >= getPhaseIndex("pension");
+}
+
+function getPhaseIndex(phaseKey) {
+  return PHASES.findIndex((phase) => phase.key === phaseKey);
+}
+
+function getPhaseStartDate(phaseKey) {
+  const birth = new Date(state.profile.birthDate);
+  const startAge = toNumber(state.phaseValues[phaseKey]?.startAge);
+  return new Date(birth.getFullYear() + startAge, birth.getMonth(), 1);
+}
+
+function getMonthDifference(fromDate, toDate) {
+  return (toDate.getFullYear() - fromDate.getFullYear()) * 12 + toDate.getMonth() - fromDate.getMonth();
 }
 function renderForecastChart(container, seriesList, options = {}) {
   const allPoints = seriesList.flatMap((series) => series.values);

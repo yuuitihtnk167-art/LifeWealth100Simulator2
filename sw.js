@@ -1,9 +1,9 @@
-const CACHE_NAME = "lifewealth100-v20260531-1";
+const CACHE_NAME = "lifewealth100-v20260601-6";
 const APP_SHELL = [
   "./",
   "./index.html",
-  "./styles.css?v=20260531-9",
-  "./app.js?v=20260531-9",
+  "./styles.css?v=20260601-6",
+  "./app.js?v=20260601-6",
   "./manifest.webmanifest",
   "./assets/icons/favicon-16x16.png",
   "./assets/icons/favicon-32x32.png",

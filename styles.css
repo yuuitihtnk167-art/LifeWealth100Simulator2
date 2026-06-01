@@ -404,6 +404,14 @@ textarea { resize: vertical; min-height: 6.2rem; }
 
 .data-table tr:last-child td { border-bottom: 0; }
 .data-table tr.timeline-phase-shift td { background: rgba(15, 106, 111, 0.08); }
+.data-table td.needs-review {
+  background: #fff7cc;
+}
+.data-table td.needs-review input,
+.data-table td.needs-review select {
+  background: #fffdf0;
+  border-color: rgba(178, 132, 0, 0.34);
+}
 .data-table td.timeline-amount-gain {
   color: #1c5aa6;
   font-weight: 700;
