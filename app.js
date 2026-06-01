@@ -72,8 +72,6 @@ const dom = {
   restoreFile: document.querySelector("#restore-file"),
   seedSampleButton: document.querySelector("#seed-sample-button"),
   assetCardGrid: document.querySelector("#asset-card-grid"),
-  dashboardWarningList: document.querySelector("#dashboard-warning-list"),
-  researchWarningList: document.querySelector("#research-warning-list"),
   heroNetWorth: document.querySelector("#hero-net-worth"),
   heroFutureWorthLabel: document.querySelector("#hero-future-worth-label"),
   heroFutureWorth: document.querySelector("#hero-future-worth"),
@@ -99,7 +97,6 @@ const dom = {
   pensionTable: document.querySelector("#pension-table"),
   loanTable: document.querySelector("#loan-table"),
   cardTable: document.querySelector("#card-table"),
-  researchStrip: document.querySelector("#research-strip"),
   networthChart: document.querySelector("#networth-chart"),
   cashChart: document.querySelector("#cash-chart"),
   chartDetailPanel: document.querySelector("#chart-detail-panel"),
@@ -245,6 +242,7 @@ function createDefaultState() {
     phaseValues[phase.key] = {
       startAge: index === 0 ? 0 : [65, 67, 68, 85][index - 1],
       retirementBonus: 0,
+      retirementBonusDate: "",
       incomes: INCOME_FIELDS.reduce((acc, field) => ({ ...acc, [field.key]: 0 }), {}),
       expenses: EXPENSE_FIELDS.reduce((acc, field) => ({ ...acc, [field.key]: 0 }), {}),
     };
@@ -292,7 +290,6 @@ function createDefaultState() {
       cards: [],
     },
     computed: {
-      warnings: [],
       snapshot: null,
       timeline: [],
       summary: null,
@@ -583,7 +580,6 @@ function renderApp(statusMessage = "") {
   renderPensionSection();
   renderDebtSection();
   renderResearchSection();
-  renderWarnings();
   renderImportStatus(statusMessage);
   enhanceMoneyInputs();
   switchView(currentView, true);
@@ -840,10 +836,12 @@ function renderCashSection() {
 
   dom.cashImportTable.innerHTML = renderImportedSectionTable(cashSection, {
     fallbackColumns: ["種類・名称", "残高", "保有金融機関"],
+    excludeColumns: ["変更", "削除"],
     extraColumns: [{ label: "アプリ内での扱い", render: (item) => getCashItemHandlingLabel(item) }],
   });
   dom.pointsImportTable.innerHTML = renderImportedSectionTable(pointsSection, {
     fallbackColumns: ["名称", "現在の価値"],
+    excludeColumns: ["変更", "削除"],
   });
   dom.cashExcludedTable.innerHTML = renderCashExcludedTable(excludedBondRows, dollarManagedItems, snapshot);
 }
@@ -851,7 +849,8 @@ function renderCashSection() {
 function renderImportedSectionTable(section, options = {}) {
   const rows = section?.items ?? [];
   const inferredColumns = section?.headers?.length ? [...section.headers] : Object.keys(rows[0] ?? {});
-  const columns = inferredColumns.length ? inferredColumns : [...(options.fallbackColumns ?? [])];
+  const excludedColumns = new Set(options.excludeColumns ?? []);
+  const columns = (inferredColumns.length ? inferredColumns : [...(options.fallbackColumns ?? [])]).filter((column) => !excludedColumns.has(column));
   const extraColumns = options.extraColumns ?? [];
   const allColumns = [...columns, ...extraColumns.map((column) => column.label)];
 
@@ -887,11 +886,11 @@ function renderImportedSectionTable(section, options = {}) {
 }
 
 function getCashItemHandlingLabel(item) {
-  if (isDollarManagedCashItem(item)) return "現金から除外し、ドル資産として別管理";
+  if (isDollarManagedCashItem(item)) return "現金から除外し、ドル積立として管理";
   const importedCashAsset = findImportedCashAssetRow(item);
   if (importedCashAsset) return getCashExcludedHandlingLabel(importedCashAsset);
   const candidate = getImportedCashCandidateConfig(item);
-  if (candidate) return candidate.destination === "dollar" ? "現金から除外し、ドル資産として別管理" : "現金から除外";
+  if (candidate) return candidate.destination === "dollar" ? "現金から除外し、ドル資産として別管理" : "現金から除外し、債券内で管理";
   return "現金として計上";
 }
 
@@ -911,7 +910,7 @@ function renderCashExcludedTable(rows, dollarManagedItems, snapshot) {
         amount: parseMoney(item["残高"]),
         institution: item["保有金融機関"] || "-",
         source: "現金カテゴリ",
-        handling: "現金から除外し、ドル資産として別管理",
+        handling: "現金から除外し、ドル積立として管理",
       }))
     );
   } else if (snapshot?.dollarBalance) {
@@ -974,24 +973,6 @@ function getCashExcludedSourceLabel(row) {
   return "手入力";
 }
 
-function renderWarnings() {
-  const warnings = state.computed.warnings;
-  const markup = warnings.length
-    ? warnings
-        .map(
-          (warning) => `
-            <div class="warning-card">
-              <p><strong>${escapeHtml(warning.location)}</strong>${escapeHtml(warning.message)}</p>
-            </div>
-          `
-        )
-        .join("")
-    : `<div class="warning-card"><p><strong>良好</strong>CSVからの不足項目や警告はありません。</p></div>`;
-
-  dom.dashboardWarningList.innerHTML = markup;
-  dom.researchWarningList.innerHTML = markup;
-}
-
 function renderPhaseStartsForm() {
   dom.phaseStartsForm.innerHTML = PHASES.slice(1)
     .map((phase) => {
@@ -1008,6 +989,10 @@ function renderPhaseStartsForm() {
               <label class="field">
                 <span>退職金</span>
                 ${renderMoneyInput(`data-retirement-bonus="retired"`, values.retirementBonus ?? 0)}
+              </label>
+              <label class="field">
+                <span>退職金をもらう日</span>
+                <input type="date" data-retirement-bonus-date="retired" value="${escapeHtml(values.retirementBonusDate || "")}">
               </label>
               <label class="field">
                 <span>${escapeHtml(PHASES.find((item) => item.key === "retiredPartTime")?.label ?? "定年後(アルバイト)")}開始年齢</span>
@@ -1050,6 +1035,14 @@ function renderPhaseStartsForm() {
     };
     input.addEventListener("input", handler);
     input.addEventListener("change", handler);
+  });
+
+  dom.phaseStartsForm.querySelectorAll("[data-retirement-bonus-date]").forEach((input) => {
+    input.addEventListener("change", (event) => {
+      const key = event.target.dataset.retirementBonusDate;
+      state.phaseValues[key].retirementBonusDate = event.target.value;
+      saveAndRender();
+    });
   });
 }
 
@@ -1688,7 +1681,6 @@ function renderTimelineAmountCell(rowIndex, metricKey, value, trendClass) {
 }
 
 function renderResearchSection() {
-  const summary = state.computed.summary;
   const timelineRows = state.computed.timeline;
   const ageTicks = timelineRows.reduce((ticks, row, index) => {
     const lastTick = ticks[ticks.length - 1];
@@ -1699,21 +1691,6 @@ function renderResearchSection() {
   }, []);
   const cashSeriesValues = timelineRows.map((row, index) => ({ label: row.monthLabel, xLabel: formatAge(row.age), xIndex: index, value: row.effectiveCash }));
   const cashAnnotations = buildCashChartAnnotations(timelineRows);
-
-  dom.researchStrip.innerHTML = [
-    { label: "現在総資産", value: summary ? formatCurrency(summary.currentAssets) : "--" },
-    { label: "現在純資産", value: summary ? formatCurrency(summary.currentNetWorth) : "--" },
-    { label: "不足回避に必要な改善", value: summary?.monthlyImprovementNeeded ? formatCurrency(summary.monthlyImprovementNeeded) : "0円" },
-  ]
-    .map(
-      (item) => `
-        <div class="summary-card">
-          <span class="label">${escapeHtml(item.label)}</span>
-          <strong>${escapeHtml(item.value)}</strong>
-        </div>
-      `
-    )
-    .join("");
 
   renderForecastChart(dom.networthChart, [
     {
@@ -1734,7 +1711,7 @@ function renderResearchSection() {
       color: "#0f6a6f",
       values: cashSeriesValues,
     },
-  ], { xTicks: ageTicks, annotations: cashAnnotations, detailContainer: dom.chartDetailPanel, detailRenderer: renderCashAnnotationSelection, detailContext: { cashSeriesValues } });
+  ], { xTicks: ageTicks, annotations: cashAnnotations, detailContainer: dom.chartDetailPanel, detailRenderer: renderCashAnnotationSelection, detailContext: { cashSeriesValues }, zeroLineValue: 0 });
   dom.timelineTable.innerHTML = `
     <thead>
       <tr>
@@ -2307,12 +2284,10 @@ function parseImportedBondRate(value) {
 
 function computeProjection() {
   const snapshot = computeSnapshot();
-  const warnings = buildWarnings(snapshot);
   const timeline = buildForecastTimeline(snapshot);
   const summary = buildSummary(snapshot, timeline);
 
   state.computed = {
-    warnings,
     snapshot,
     timeline,
     summary,
@@ -2349,29 +2324,6 @@ function computeSnapshot() {
     dollarBalanceUsd,
     averageBondRate,
   };
-}
-
-function buildWarnings(snapshot) {
-  const warnings = [];
-  if (!state.profile.birthDate) warnings.push({ location: "基本情報", message: "誕生日が未入力です。" });
-
-  state.manual.bondAssets.forEach((row) => {
-    if (!row.maturityDate && row.type === "bond") warnings.push({ location: "債券", message: `${row.name || "債券"} の償還日が未入力です。` });
-  });
-
-  state.manual.pensions.forEach((row) => {
-    if (!row.splitAmount && row.payoutType === "split") warnings.push({ location: "年金", message: `${row.name || "年金"} の分割金額が未入力です。` });
-    if (row.payoutType === "lump" && !getPensionLumpSumAmount(row)) warnings.push({ location: "年金", message: `${row.name || "年金"} の一括受取額を計算できません。現在価値と拠出額を確認してください。` });
-  });
-
-  state.manual.loans.forEach((row) => {
-    if (!row.endMonth) warnings.push({ location: "負債", message: `${row.name || "ローン"} の返済終了年月が未入力です。` });
-  });
-
-  if (snapshot && snapshot.effectiveCash < 0) {
-    warnings.push({ location: "ホーム", message: "現在時点の使える現金がマイナスです。現金から除外する資産の設定を確認してください。" });
-  }
-  return warnings;
 }
 
 function buildForecastTimeline(snapshot) {
@@ -2449,7 +2401,7 @@ function buildForecastTimeline(snapshot) {
     };
     const retirementBonus = Math.max(0, toNumber(state.phaseValues.retired.retirementBonus));
 
-    if (!retirementBonusPaid && age >= state.phaseValues.retired.startAge) {
+    if (!retirementBonusPaid && shouldPayRetirementBonus(cursor, age)) {
       if (retirementBonus > 0) {
         effectiveCash += retirementBonus;
         cashEvents.push(createCashEvent("退職金", retirementBonus));
@@ -2650,6 +2602,12 @@ function getPhaseForAge(age) {
   return PHASES[0];
 }
 
+function shouldPayRetirementBonus(targetDate, age) {
+  const bonusDate = state.phaseValues.retired.retirementBonusDate;
+  if (bonusDate) return isSameMonthOrPast(bonusDate, targetDate);
+  return age >= state.phaseValues.retired.startAge;
+}
+
 function getAdjustedMonthlyIncome(phase, phaseValues, targetDate, pensionPhaseStartDate, monthlyMacroEconomicSlideAdjustmentRate) {
   const baseIncome = sumValues(phaseValues.incomes);
   if (!isPensionPhaseOrLater(phase.key)) return baseIncome;
@@ -2691,10 +2649,11 @@ function renderForecastChart(container, seriesList, options = {}) {
 
   const width = 780;
   const height = 280;
-  const padding = { top: 18, right: 20, bottom: 36, left: 52 };
+  const padding = { top: 18, right: 20, bottom: 36, left: 76 };
   const values = allPoints.map((point) => point.value);
-  const min = Math.min(...values);
-  const max = Math.max(...values);
+  const scaleValues = typeof options.zeroLineValue === "number" ? [...values, options.zeroLineValue] : values;
+  const min = Math.min(...scaleValues);
+  const max = Math.max(...scaleValues);
   const span = max - min || 1;
   const plotWidth = width - padding.left - padding.right;
   const plotHeight = height - padding.top - padding.bottom;
@@ -2737,6 +2696,10 @@ function renderForecastChart(container, seriesList, options = {}) {
       `;
     })
     .join("");
+  const zeroLine =
+    typeof options.zeroLineValue === "number"
+      ? `<line x1="${padding.left}" x2="${width - padding.right}" y1="${getY(options.zeroLineValue)}" y2="${getY(options.zeroLineValue)}" stroke="#c75c33"></line>`
+      : "";
 
   const legend = seriesList
     .map(
@@ -2761,6 +2724,7 @@ function renderForecastChart(container, seriesList, options = {}) {
     <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="forecast chart">
       <rect x="0" y="0" width="${width}" height="${height}" fill="transparent"></rect>
       ${valueLabels}
+      ${zeroLine}
       ${lines}
       ${annotations}
       ${axisLabels}
@@ -3501,7 +3465,7 @@ function findImportedCashAssetRow(item) {
 }
 
 function getCashExcludedHandlingLabel(row) {
-  return row.destination === "dollar" ? "現金から除外し、ドル資産として別管理" : "現金から除外";
+  return row.destination === "dollar" ? "現金から除外し、ドル資産として別管理" : "現金から除外し、債券内で管理";
 }
 
 function isDollarManagedCashItem(item) {
