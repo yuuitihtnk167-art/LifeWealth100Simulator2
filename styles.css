@@ -210,12 +210,12 @@ input, select, textarea, button { font: inherit; }
 }
 
 .phase-start-pair-card {
-  grid-column: span 3;
+  grid-column: span 4;
 }
 
 .phase-start-pair {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 1.2fr) minmax(0, 1fr);
   gap: 0.8rem;
   align-items: end;
 }
@@ -579,17 +579,6 @@ textarea { resize: vertical; min-height: 6.2rem; }
   cursor: pointer;
 }
 
-.warning-list { display: grid; gap: 0.72rem; }
-
-.warning-card {
-  padding: 0.95rem 1rem;
-  border-radius: 18px;
-  border: 1px solid rgba(173, 77, 52, 0.22);
-  background: var(--warning-soft);
-}
-
-.warning-card p { margin: 0; line-height: 1.6; }
-.warning-card strong { display: inline-block; margin-right: 0.5rem; }
 .chart-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
 .chart-card {
