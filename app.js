@@ -49,6 +49,11 @@ const SECTION_HEADERS = new Set([
   "その他の資産",
 ]);
 
+const SECTION_HEADER_ALIASES = new Map([
+  ["株式(現物)", "株式（現物）"],
+  ["ポイント", "ポイント・マイル"],
+]);
+
 const state = loadState();
 hydrateStateFromImports();
 let currentView = getInitialView();
@@ -2042,10 +2047,12 @@ async function handleImportClick() {
     }
 
     const importRaw = await readCsvFile(importFile);
+    const parsedAssetList = parseAssetListCsv(importRaw);
+    const parsedAssetTrend = parseAssetTrendCsv(importRaw, importFile.name);
     state.imports.assetListRaw = importRaw;
     state.imports.assetTrendRaw = importRaw;
-    state.imports.parsedAssetList = parseAssetListCsv(importRaw);
-    state.imports.parsedAssetTrend = parseAssetTrendCsv(importRaw, importFile.name);
+    state.imports.parsedAssetList = parsedAssetList;
+    state.imports.parsedAssetTrend = parsedAssetTrend;
     state.imports.importedAt = new Date().toISOString();
     hydrateStateFromImports();
     saveAndRender("CSVを読み込みました。");
@@ -3162,24 +3169,41 @@ async function readCsvFile(file) {
 function parseAssetListCsv(text) {
   const rows = parseCsvRows(text);
   const sections = {};
+  const expectedSections = collectExpectedAssetSections(rows);
+  const sectionsWithTotal = new Set();
   let currentSection = null;
   let header = [];
 
-  rows.forEach((rawRow) => {
+  rows.forEach((rawRow, rowIndex) => {
     const row = rawRow.map((cell) => cell.trim());
     const first = row[0];
     if (!first) return;
-    if (SECTION_HEADERS.has(first)) {
-      currentSection = first;
+    if (first.startsWith("合計：")) {
+      if (!currentSection) {
+        throw new Error("セクション見出しのない合計行が見つかりました。");
+      }
+      if (sectionsWithTotal.has(currentSection)) {
+        throw new Error(`「${currentSection}」セクションで合計行が複数回見つかりました。`);
+      }
+      sections[currentSection].total = parseMoney(first);
+      sectionsWithTotal.add(currentSection);
+      return;
+    }
+    const normalizedSection = normalizeSectionHeader(first);
+    const nextFirst = String(rows[rowIndex + 1]?.[0] ?? "").trim();
+    const isSectionCandidate = row.filter(Boolean).length === 1 && nextFirst.startsWith("合計：");
+    const isSummaryCategory = isAssetSummaryRow(row);
+    if (isSectionCandidate && !SECTION_HEADERS.has(normalizedSection)) {
+      throw new Error(`未対応の資産セクション「${first}」が見つかりました。`);
+    }
+    if ((isSectionCandidate || isSummaryCategory) && SECTION_HEADERS.has(normalizedSection)) {
+      currentSection = normalizedSection;
       sections[currentSection] = { total: 0, headers: [], items: [] };
+      sectionsWithTotal.delete(currentSection);
       header = [];
       return;
     }
     if (!currentSection) return;
-    if (first.startsWith("合計：")) {
-      sections[currentSection].total = parseMoney(first);
-      return;
-    }
     if (!header.length) {
       header = row.filter(Boolean);
       sections[currentSection].headers = header;
@@ -3194,7 +3218,37 @@ function parseAssetListCsv(text) {
     }
   });
 
+  const missingSections = [...expectedSections].filter((section) => !sectionsWithTotal.has(section));
+  if (missingSections.length) {
+    throw new Error(`資産内訳にあるセクションの詳細が見つかりません: ${missingSections.join("、")}`);
+  }
+
   return { sections };
+}
+
+function normalizeSectionHeader(value) {
+  const trimmed = String(value ?? "").trim();
+  const normalizedBrackets = trimmed.replaceAll("(", "（").replaceAll(")", "）");
+  return SECTION_HEADER_ALIASES.get(trimmed) ?? SECTION_HEADER_ALIASES.get(normalizedBrackets) ?? normalizedBrackets;
+}
+
+function isAssetSummaryRow(row) {
+  return /円$/.test(row[1] ?? "") && /%$/.test(row[2] ?? "");
+}
+
+function collectExpectedAssetSections(rows) {
+  const expectedSections = new Set();
+  rows.slice(0, 10).forEach((rawRow) => {
+    const row = rawRow.map((cell) => cell.trim());
+    if (!isAssetSummaryRow(row)) return;
+
+    const normalizedSection = normalizeSectionHeader(row[0]);
+    if (!SECTION_HEADERS.has(normalizedSection)) {
+      throw new Error(`資産内訳に未対応のカテゴリ「${row[0]}」が見つかりました。`);
+    }
+    expectedSections.add(normalizedSection);
+  });
+  return expectedSections;
 }
 
 function parseAssetTrendCsv(text, sourceName = "") {
