@@ -49,9 +49,27 @@ const SECTION_HEADERS = new Set([
   "その他の資産",
 ]);
 
+const LEGACY_CASH_SECTION = "預金・現金・暗号資産";
+const CASH_SECTION = "預金・現金";
+const CRYPTO_SECTION = "暗号資産";
+const SUPPORTED_SECTION_HEADERS = new Set([...SECTION_HEADERS, CASH_SECTION, CRYPTO_SECTION]);
+
 const SECTION_HEADER_ALIASES = new Map([
   ["株式(現物)", "株式（現物）"],
   ["ポイント", "ポイント・マイル"],
+]);
+
+const REQUIRED_SECTION_COLUMNS = new Map([
+  [LEGACY_CASH_SECTION, ["種類・名称", "残高", "保有金融機関"]],
+  [CASH_SECTION, ["種類・名称", "残高", "保有金融機関"]],
+  [CRYPTO_SECTION, ["種類・名称", "残高", "保有金融機関"]],
+  ["株式（現物）", ["銘柄名", "評価額", "保有金融機関"]],
+  ["投資信託", ["銘柄名", "評価額", "保有金融機関"]],
+  ["債券", ["銘柄名", "評価額", "保有金融機関"]],
+  ["保険", ["名称", "現在価値"]],
+  ["年金", ["名称", "現在価値"]],
+  ["ポイント・マイル", ["名称", "現在の価値"]],
+  ["その他の資産", ["名称", "現在価値"]],
 ]);
 
 const state = loadState();
@@ -3171,6 +3189,7 @@ function parseAssetListCsv(text) {
   const sections = {};
   const expectedSections = collectExpectedAssetSections(rows);
   const sectionsWithTotal = new Set();
+  const detailSections = new Set();
   let currentSection = null;
   let header = [];
 
@@ -3180,10 +3199,10 @@ function parseAssetListCsv(text) {
     if (!first) return;
     if (first.startsWith("合計：")) {
       if (!currentSection) {
-        throw new Error("セクション見出しのない合計行が見つかりました。");
+        throw createCsvFormatChangeError("セクション見出しのない合計行が見つかりました。");
       }
       if (sectionsWithTotal.has(currentSection)) {
-        throw new Error(`「${currentSection}」セクションで合計行が複数回見つかりました。`);
+        throw createCsvFormatChangeError(`「${currentSection}」セクションで合計行が複数回見つかりました。`);
       }
       sections[currentSection].total = parseMoney(first);
       sectionsWithTotal.add(currentSection);
@@ -3193,10 +3212,14 @@ function parseAssetListCsv(text) {
     const nextFirst = String(rows[rowIndex + 1]?.[0] ?? "").trim();
     const isSectionCandidate = row.filter(Boolean).length === 1 && nextFirst.startsWith("合計：");
     const isSummaryCategory = isAssetSummaryRow(row);
-    if (isSectionCandidate && !SECTION_HEADERS.has(normalizedSection)) {
-      throw new Error(`未対応の資産セクション「${first}」が見つかりました。`);
+    if (isSectionCandidate && !SUPPORTED_SECTION_HEADERS.has(normalizedSection)) {
+      throw createCsvFormatChangeError(`未対応の資産セクション「${first}」が見つかりました。`);
     }
-    if ((isSectionCandidate || isSummaryCategory) && SECTION_HEADERS.has(normalizedSection)) {
+    if ((isSectionCandidate || isSummaryCategory) && SUPPORTED_SECTION_HEADERS.has(normalizedSection)) {
+      if (isSectionCandidate && detailSections.has(normalizedSection)) {
+        throw createCsvFormatChangeError(`「${normalizedSection}」セクションが複数回見つかりました。`);
+      }
+      if (isSectionCandidate) detailSections.add(normalizedSection);
       currentSection = normalizedSection;
       sections[currentSection] = { total: 0, headers: [], items: [] };
       sectionsWithTotal.delete(currentSection);
@@ -3220,9 +3243,11 @@ function parseAssetListCsv(text) {
 
   const missingSections = [...expectedSections].filter((section) => !sectionsWithTotal.has(section));
   if (missingSections.length) {
-    throw new Error(`資産内訳にあるセクションの詳細が見つかりません: ${missingSections.join("、")}`);
+    throw createCsvFormatChangeError(`資産内訳にあるセクションの詳細が見つかりません: ${missingSections.join("、")}`);
   }
 
+  validateSectionColumns(sections, expectedSections);
+  mergeSplitCashSections(sections);
   return { sections };
 }
 
@@ -3238,17 +3263,90 @@ function isAssetSummaryRow(row) {
 
 function collectExpectedAssetSections(rows) {
   const expectedSections = new Set();
-  rows.slice(0, 10).forEach((rawRow) => {
+  const summaryHeadingIndex = rows.findIndex((row) => String(row[0] ?? "").trim() === "資産の内訳");
+  if (summaryHeadingIndex < 0) {
+    throw createCsvFormatChangeError("「資産の内訳」が見つかりません。");
+  }
+
+  let summaryTotal = 0;
+  for (const rawRow of rows.slice(summaryHeadingIndex + 1)) {
     const row = rawRow.map((cell) => cell.trim());
-    if (!isAssetSummaryRow(row)) return;
+    if (!isAssetSummaryRow(row)) break;
 
     const normalizedSection = normalizeSectionHeader(row[0]);
-    if (!SECTION_HEADERS.has(normalizedSection)) {
-      throw new Error(`資産内訳に未対応のカテゴリ「${row[0]}」が見つかりました。`);
+    if (!SUPPORTED_SECTION_HEADERS.has(normalizedSection)) {
+      throw createCsvFormatChangeError(`資産内訳に未対応のカテゴリ「${row[0]}」が見つかりました。`);
     }
+    if (expectedSections.has(normalizedSection)) {
+      throw createCsvFormatChangeError(`資産内訳に「${normalizedSection}」が複数回見つかりました。`);
+    }
+    summaryTotal += parseMoney(row[1]);
     expectedSections.add(normalizedSection);
-  });
+  }
+
+  if (!expectedSections.size) {
+    throw createCsvFormatChangeError("資産内訳のカテゴリが見つかりません。");
+  }
+  validateSectionLayout(expectedSections);
+
+  const grandTotalLabel = String(rows[0]?.[0] ?? "").trim();
+  const grandTotal = parseMoney(grandTotalLabel);
+  if (!grandTotalLabel.startsWith("資産総額") || Math.abs(grandTotal - summaryTotal) >= 1) {
+    throw createCsvFormatChangeError("資産総額と資産内訳の合計が一致しません。");
+  }
   return expectedSections;
+}
+
+function validateSectionLayout(sections) {
+  const splitLayout = new Set([...SECTION_HEADERS].filter((section) => section !== LEGACY_CASH_SECTION));
+  splitLayout.add(CASH_SECTION);
+  splitLayout.add(CRYPTO_SECTION);
+  const isSupportedLayout = [SECTION_HEADERS, splitLayout].some(
+    (layout) => layout.size === sections.size && [...layout].every((section) => sections.has(section))
+  );
+  if (!isSupportedLayout) {
+    throw createCsvFormatChangeError("資産内訳のカテゴリ構成が対応済みの形式と一致しません。");
+  }
+}
+
+function validateSectionColumns(sections, expectedSections) {
+  expectedSections.forEach((sectionName) => {
+    const section = sections[sectionName];
+    const requiredColumns = REQUIRED_SECTION_COLUMNS.get(sectionName) ?? [];
+    const missingColumns = requiredColumns.filter((column) => !section.headers.includes(column));
+    if (missingColumns.length) {
+      throw createCsvFormatChangeError(`「${sectionName}」セクションに必要な列がありません: ${missingColumns.join("、")}`);
+    }
+  });
+}
+
+function mergeSplitCashSections(sections) {
+  const legacySection = sections[LEGACY_CASH_SECTION];
+  const cashSection = sections[CASH_SECTION];
+  const cryptoSection = sections[CRYPTO_SECTION];
+  const hasSplitSection = Boolean(cashSection || cryptoSection);
+
+  if (legacySection && hasSplitSection) {
+    throw createCsvFormatChangeError("旧形式と新形式の現金セクションが同時に含まれています。");
+  }
+  if (hasSplitSection && (!cashSection || !cryptoSection)) {
+    throw createCsvFormatChangeError("「預金・現金」と「暗号資産」のどちらか一方が見つかりません。");
+  }
+  if (!hasSplitSection) return;
+
+  sections[LEGACY_CASH_SECTION] = {
+    total: cashSection.total + cryptoSection.total,
+    headers: [...cashSection.headers],
+    items: [...cashSection.items, ...cryptoSection.items],
+  };
+  delete sections[CASH_SECTION];
+  delete sections[CRYPTO_SECTION];
+}
+
+function createCsvFormatChangeError(detail) {
+  return new Error(
+    `CSV形式が変更された可能性があります。${detail} 既存データは変更していません。以前に正常に読み込めたCSVと比較して調査してください。`
+  );
 }
 
 function parseAssetTrendCsv(text, sourceName = "") {
