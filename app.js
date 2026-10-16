@@ -1123,6 +1123,12 @@ function renderCashflowSections() {
     `;
   }).join("");
 
+  dom.cashflowPhaseSections.querySelectorAll("[data-adopt-phase]").forEach((button) => {
+    // 入力確定による再描画で、クリック前にボタンが消えるのを防ぐ。
+    button.addEventListener("pointerdown", (event) => event.preventDefault());
+    button.addEventListener("click", () => adoptPreviousPhaseValue(button));
+  });
+
   dom.cashflowPhaseSections.querySelectorAll("[data-phase-field]").forEach((input) => {
     const handler = (event) => {
       const phaseKey = event.target.dataset.phaseField;
@@ -1139,18 +1145,41 @@ function renderCashflowSections() {
   });
 }
 
+function adoptPreviousPhaseValue(button) {
+  const phaseKey = button.dataset.adoptPhase;
+  const phaseIndex = PHASES.findIndex((phase) => phase.key === phaseKey);
+  const kind = button.dataset.kind;
+  const fieldKey = button.dataset.key;
+  const fields = kind === "income" ? INCOME_FIELDS : kind === "expense" ? EXPENSE_FIELDS : [];
+  if (phaseIndex < 1 || !fields.some((field) => field.key === fieldKey)) return;
+  const bucketKey = kind === "income" ? "incomes" : "expenses";
+  const previousPhase = PHASES[phaseIndex - 1];
+  const focusDescriptor = describeFocusableElement(button);
+  // 入力中の値を確定してから採用する。確定時にボタンが再生成される場合がある。
+  button.focus({ preventScroll: true });
+  state.phaseValues[phaseKey][bucketKey][fieldKey] = state.phaseValues[previousPhase.key][bucketKey][fieldKey] ?? 0;
+  findFocusableElement(focusDescriptor)?.focus({ preventScroll: true });
+  saveAndRender();
+}
+
 function renderPhaseMoneyField({ label, phaseKey, kind, fieldKey, value, previousPhaseLabel = "", previousValue = null }) {
+  const inputId = `phase-${phaseKey}-${kind}-${fieldKey}`;
   const reference = previousPhaseLabel
-    ? `<span class="phase-field-reference">${escapeHtml(previousPhaseLabel)} ${escapeHtml(formatCurrency(previousValue ?? 0))}</span>`
+    ? `<button type="button" class="phase-field-reference phase-adopt-button"
+        data-adopt-phase="${escapeHtml(phaseKey)}" data-kind="${escapeHtml(kind)}" data-key="${escapeHtml(fieldKey)}"
+        aria-label="${escapeHtml(`${label}に${previousPhaseLabel}の${formatCurrency(previousValue ?? 0)}を採用`)}">
+        <span>${escapeHtml(previousPhaseLabel)} ${escapeHtml(formatCurrency(previousValue ?? 0))}</span>
+        <strong>採用</strong>
+      </button>`
     : "";
   return `
-    <label class="field phase-field">
-      <span>${escapeHtml(label)}</span>
-      <div class="phase-field-control">
-        ${renderMoneyInput(`data-phase-field="${escapeHtml(phaseKey)}" data-kind="${escapeHtml(kind)}" data-key="${escapeHtml(fieldKey)}"`, value)}
+    <div class="field phase-field">
+      <label for="${escapeHtml(inputId)}">${escapeHtml(label)}</label>
+      <div class="phase-field-control${previousPhaseLabel ? " phase-field-with-reference" : ""}">
+        ${renderMoneyInput(`id="${escapeHtml(inputId)}" data-phase-field="${escapeHtml(phaseKey)}" data-kind="${escapeHtml(kind)}" data-key="${escapeHtml(fieldKey)}"`, value)}
         ${reference}
       </div>
-    </label>
+    </div>
   `;
 }
 
